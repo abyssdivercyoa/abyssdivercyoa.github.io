@@ -90,6 +90,9 @@ body {
 	font-size : 13px;
 	pointer-events : none;
 }
+.moreRound {
+	border-radius : 18px;
+}
 #infoButton {
 	position : fixed;
 	right : 5px;
@@ -905,8 +908,8 @@ function eatDay(purchasedFirst) { // normal order: foraged (spoils), bought, the
 	if (!ff && f[0] - need() <= HUNGER_DEATH + 1e-9 && emergencyVend("food")) return;
 	f[0] -= need(); // out of food: deficit
 }
-var THIRST_DEATH = -4, HUNGER_DEATH = -31; // days of water / food in deficit at which you die
-function starvationCheck() { // ruled: water at -4 days or food at -31 days is fatal (the Phoenix Obol, if it revives you, undoes the deficit: my reading)
+var THIRST_DEATH = -3, HUNGER_DEATH = -21; // days of water / food in deficit at which you die
+function starvationCheck() { // ruled: water at -3 days or food at -21 days is fatal (the Phoenix Obol, if it revives you, undoes the deficit: my reading)
 	if (character.water[0] <= THIRST_DEATH + 1e-9) { die("You die of thirst (water at " + character.water[0] + " days)."); if (!character.dead) character.water[0] = 0; }
 	if (!character.dead && character.food[0] <= HUNGER_DEATH + 1e-9) { die("You starve to death (food at " + character.food[0] + " days)."); if (!character.dead) character.food[0] = 0; }
 }
@@ -2420,7 +2423,7 @@ function takeAction(obj) {
 		if (cherryCtx) estDays = 0; // Cherry's Relic roll takes no time
 		if (!cherryCtx) { // a Relic from Cherry's luck simply appears before you: none of the requirements below apply (weight and the Broker's affordability still do)
 			if (name == "Forest's Gift") { if (!character.hasSword) return; }
-			else if (name == "Umbra Trident") { lightPlan = planLight(false, estDays); if (!lightPlan) return; }
+			else if (name == "Umbra Trident") { lightPlan = planLight(true, estDays); if (!lightPlan) return; }
 			else if (name == "Orbweaver") { if (!has("items", "Rope")) return; }
 			else if (name == "Acrobatic Accord") { if (!has("items", "Scuba Gear")) return; }
 			else if (name == "Gilded Prison") {
@@ -2430,7 +2433,7 @@ function takeAction(obj) {
 					timeSave = -1;
 				};
 			} else if (name == "Timekeeper's Keepsake") { if (!has("items", "Rope")) return; }
-			else if (name == "Moonwatcher") { lightPlan = planLight(false, estDays); if (!lightPlan) return; }
+			else if (name == "Moonwatcher") { lightPlan = planLight(true, estDays); if (!lightPlan) return; }
 			else if (name == "Twin Polaris") { if ((60*character.companions.length + totalWeight() < 90)) return; }
 			else if (name == "Empath Coil") { if (!ammoHandler(1)) return; }
 			else if (name == "Out of Mind") { if (!has("items", "Rope") && !has("relics", "Sunbeam")) return; }
@@ -2439,7 +2442,7 @@ function takeAction(obj) {
 				if (character.ammo < 4) return;
 				if (character.ammo % 6 != 5 && character.ammo % 6 != 0) character.itemWeight -= 0.2;
 				character.ammo -= 4;
-			} else if (name == "Phoenix Obol") { lightPlan = planLight(false, estDays); if (!lightPlan) return; }
+			} else if (name == "Phoenix Obol") { lightPlan = planLight(true, estDays); if (!lightPlan) return; }
 			else if (name == "Granted Granite") { if ((60*character.companions.length + totalWeight() < 200)) return; }
 			else if (name == "Absolute Oracle") { lightPlan = planLight(true, estDays); if (!lightPlan) return; } // Moonwatcher is not enough
 			else if (name == "Drifting Aperture") { if (!has("items", "Rope")) return; }
@@ -2578,9 +2581,9 @@ function gotoPage(n) {
 	if (n != 6) character.wings = false; // the wings only matter inside layer 6
 	currentLayer = n;
 	updateLayerLine();
-	get('pageContainer').style.backgroundImage = 'url("Assets/' + (n+1) + (n == 10 ? '.gif' : '.png') + '")';
+	get('pageContainer').style.backgroundImage = 'url("Abyss Diver_files/' + (n+1) + (n == 10 ? '.gif' : '.png') + '")';
 	get('pageContainer').style.height = layers[n][1] + "px";
-	get('track').src = "Assets/" + (n+1) + ".mp3";
+	get('track').src = "Abyss Diver_files/" + (n+1) + ".mp3";
 	get('player').load();
 	renderOverlay(n);
 	get('section-1').style.display = (n == 0) ? "" : "none";
@@ -2697,8 +2700,8 @@ function refusalReason(id, n) { // null if clicking the hotspot would do somethi
 		if ((name == "Forest's Gift" || name == "Catastrophe") && !character.hasSword) return "Needs a Sword.";
 		if (["Orbweaver", "Timekeeper's Keepsake", "Drifting Aperture", "Lifespanner"].indexOf(name) >= 0 && !has("items", "Rope")) return "Needs a Rope.";
 		if ((name == "Acrobatic Accord" || name == "Forbidden Grimoire") && !has("items", "Scuba Gear")) return "Needs Scuba Gear.";
-		if (["Umbra Trident", "Moonwatcher", "Phoenix Obol", "Arbiter of Dawn"].indexOf(name) >= 0 && !lightOK(false, est)) return currentLayer == 9 ? "Needs a light that works underwater." : "Needs a light source.";
-		if (name == "Absolute Oracle" && !lightOK(true, est)) return currentLayer == 9 ? "Needs a light that works underwater." : "Needs a strong light source (a Moonwatcher is not enough).";
+		if (["Umbra Trident", "Moonwatcher", "Phoenix Obol", "Absolute Oracle"].indexOf(name) >= 0 && !lightOK(true, est)) return "Needs a light source.";
+		if (name == "Arbiter of Dawn" && !lightOK(false, est)) return "Needs a light that works underwater.";
 		if (name == "Gilded Prison" && !character.hasSword && !heatOK(est + 1)) return "Needs a Sword or a heat source.";
 		if (name == "Twin Polaris" && 60*character.companions.length + totalWeight() < 90) return "Needs a combined weight of at least 90 kg.";
 		if (name == "Granted Granite" && 60*character.companions.length + totalWeight() < 200) return "Needs a combined weight of at least 200 kg.";
@@ -2809,17 +2812,19 @@ function moveTip(ev) {
 	t.style.top = y + "px";
 }
 function hideTip() { var t = get('tip'); if (t) t.style.display = "none"; }
+var OVERLAY_GROW = 1; // px added on every side of every hotspot (the stored boxes were tuned at 150% page zoom, where they come out slightly small at 100%); set to 0 to switch off
 function renderOverlay(n) {
 	hideTip();
-	var overlay = '', div = '';
+	var overlay = '', div = '', g = OVERLAY_GROW;
+	var cls = "overlay";
+	if (n == 0) cls += " moreRound";
 	for (var i=0;i<overlays[n].length;i++) {
 		o = overlays[n][i];
-		var cls = "overlay";
 		div = '<div id="' + o[0] + '" class="' + cls + '" style="';
-		div += 'top:' + o[1] + 'px;';
-		div += 'left:' + o[2] + 'px;';
-		div += 'width:' + o[3] + 'px;';
-		div += 'height:' + o[4] + 'px;';
+		div += 'top:' + (o[1] - g) + 'px;';
+		div += 'left:' + (o[2] - g) + 'px;';
+		div += 'width:' + (o[3] + 2*g) + 'px;';
+		div += 'height:' + (o[4] + 2*g) + 'px;';
 		if (o[0] == "wonder:Raison d'Etre") div += 'border-radius:48px;'; // 4x the normal rounding
 		div += '" onmouseover="hoverOverlay(this, event)" onmousemove="moveTip(event)" onmouseout="hideTip()" onclick="clickOverlay(this, event)" oncontextmenu="return rightClickOverlay(this, event)"></div>';
 		overlay += div;
@@ -2853,9 +2858,9 @@ function restoreState(json, logText) { // replaces the whole game state (in plac
 function refreshView() { // redraw the page for the current state without the side effects of gotoPage (a paused crossing and the wings stay)
 	var n = currentLayer;
 	hideTip();
-	get('pageContainer').style.backgroundImage = 'url("Assets/' + (n+1) + (n == 10 ? '.gif' : '.png') + '")';
+	get('pageContainer').style.backgroundImage = 'url("Abyss Diver_files/' + (n+1) + (n == 10 ? '.gif' : '.png') + '")';
 	get('pageContainer').style.height = layers[n][1] + "px";
-	var src = "Assets/" + (n+1) + ".mp3";
+	var src = "Abyss Diver_files/" + (n+1) + ".mp3";
 	if (get('track').getAttribute && get('track').getAttribute("src") != src) { get('track').src = src; get('player').load(); }
 	renderOverlay(n);
 	get('section-1').style.display = (n == 0) ? "" : "none";
@@ -2991,7 +2996,7 @@ function loader() {
 </div>
 <div>
 <audio id="player" autoplay controls loop>
-<source id="track" src="Assets/1.mp3" type="audio/mpeg"></source>
+<source id="track" src="Abyss Diver_files/1.mp3" type="audio/mpeg"></source>
 </audio>
 </div>
 <section id="section-1" class=" ">
