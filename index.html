@@ -2581,9 +2581,9 @@ function gotoPage(n) {
 	if (n != 6) character.wings = false; // the wings only matter inside layer 6
 	currentLayer = n;
 	updateLayerLine();
-	get('pageContainer').style.backgroundImage = 'url("Abyss Diver_files/' + (n+1) + (n == 10 ? '.gif' : '.png') + '")';
+	get('pageContainer').style.backgroundImage = 'url("Assets/' + (n+1) + (n == 10 ? '.gif' : '.png') + '")';
 	get('pageContainer').style.height = layers[n][1] + "px";
-	get('track').src = "Abyss Diver_files/" + (n+1) + ".mp3";
+	get('track').src = "Assets/" + (n+1) + ".mp3";
 	get('player').load();
 	renderOverlay(n);
 	get('section-1').style.display = (n == 0) ? "" : "none";
@@ -2858,9 +2858,9 @@ function restoreState(json, logText) { // replaces the whole game state (in plac
 function refreshView() { // redraw the page for the current state without the side effects of gotoPage (a paused crossing and the wings stay)
 	var n = currentLayer;
 	hideTip();
-	get('pageContainer').style.backgroundImage = 'url("Abyss Diver_files/' + (n+1) + (n == 10 ? '.gif' : '.png') + '")';
+	get('pageContainer').style.backgroundImage = 'url("Assets/' + (n+1) + (n == 10 ? '.gif' : '.png') + '")';
 	get('pageContainer').style.height = layers[n][1] + "px";
-	var src = "Abyss Diver_files/" + (n+1) + ".mp3";
+	var src = "Assets/" + (n+1) + ".mp3";
 	if (get('track').getAttribute && get('track').getAttribute("src") != src) { get('track').src = src; get('player').load(); }
 	renderOverlay(n);
 	get('section-1').style.display = (n == 0) ? "" : "none";
@@ -2996,7 +2996,7 @@ function loader() {
 </div>
 <div>
 <audio id="player" autoplay controls loop>
-<source id="track" src="Abyss Diver_files/1.mp3" type="audio/mpeg"></source>
+<source id="track" src="Assets/1.mp3" type="audio/mpeg"></source>
 </audio>
 </div>
 <section id="section-1" class=" ">
