@@ -44,12 +44,15 @@ body {
 #navArrow:hover {
 	opacity : 1;
 }
+/* nav menus: every row (layer cell, jump entry, submenu entry) has the same height and its own 1px separator; the submenu's top lines up with its layer cell */
+#navTable .cell, #navTable .sub div, #navJump .jl { box-sizing : border-box; height : 24px; line-height : 22px; padding : 0px 8px; border : 1px solid gray; background-color : black; cursor : pointer; white-space : nowrap; }
+#navTable .cell + .cell, #navTable .sub div + div, #navJump .jl + .jl { margin-top : -1px; }
 #navTable .cell { position : relative; }
-#navTable .sub { display : none; position : absolute; left : 100%; top : 0px; min-width : 130px; border : 1px solid gray; background-color : black; z-index : 3; }
+#navTable .sub { display : none; position : absolute; left : 100%; top : -1px; min-width : 130px; z-index : 3; }
+#navTable .sub::after { content : ""; position : absolute; left : 0px; right : -16px; top : -12px; bottom : -12px; z-index : -1; } /* invisible margin around the submenu: the pointer may stray a little without losing it */
 #navTable .cell:hover > .sub, #navTable .cell.open > .sub { display : block; }
-#navJump { display : none; width : 160px; border : 1px solid gray; background-color : black; }
+#navJump { display : none; width : 160px; }
 #navTable .cell:hover { background-color : #222; }
-#navTable .sub div, #navJump .jl { padding : 2px 8px; cursor : pointer; white-space : nowrap; }
 #navTable .sub div:hover, #navJump .jl:hover { background-color : #444; }
 .cell {
 	width : 225px;
@@ -276,7 +279,7 @@ hr {
 }
 </style>
 <script type="text/javascript">
-// Last modified: 2026-10-15 00:34:52 UTC (the browser save now includes the undo history, so Undo works after resuming)
+// Last modified: 2026-10-15 20:40:41 UTC (the Actions menu is rebuilt after a save is resumed, loaded or imported, so "Undo last action" appears at once)
 var dialogOpen = false, dialogQueue = [];
 // Every dialog except a plain OK notice has a Cancel button. Cancel throws DLG_CANCEL, which withUndo() catches: the whole action that opened the dialog is rolled back as if it had never been clicked
 // (time, food, corruption and log lines included), so Cancel never silently picks an answer. Questions with a real "no" answer have their own button for it.
@@ -982,7 +985,7 @@ var character = {
 	"healsUsed" : 0, // Lifespanner heals used on that day (7 per day)
 	"pendingArrival" : null, // {layer, portal}: a trip whose costs are all paid, paused just before you enter the next layer so you can take Curses; only Curses (and the same portal) are accepted
 	"wings" : false, // the Daedalus wings are in use in layer 6: no jinxed flame while you stay, carrying capacity halved; ends when you leave the layer
-	"elderDays" : 0, // The Elder: days spent in layer 9 in total (cumulative across visits)
+	"elderDays" : 0, // The Elder: days spent in layer 9 during this visit (reset on every layer change)
 	"heightDir" : null, // "taller" or "shorter": set by the first height choice (Flairabou or Dizzying Heights); later height changes must go the same way
 	"conjoinedTo" : null, // Conjoined: the companion (their bonuses are negated) or "twin" you are conjoined to
 	"graspLimb" : null, // which kind of lost limb Glory's Grasp occupies when you lost both arms and legs
@@ -1321,7 +1324,7 @@ function forageOrder(kind, spots) { // water: free spots first, then the rest wi
 	});
 }
 // ---- Smart auto-foraging: a spot you can forage at no time is used for each day's food or water before anything you carry, as long as it is on.
-// On = automatic (exactly while it is free: no time, no ammo, no side effect with today's bonuses) unless you switched it with a right click (stored per layer in character.autoForage).
+// On = automatic (exactly while it is free: no time, no ammo, no side effect with today's bonuses) unless you switched it with a right-click (stored per layer in character.autoForage).
 function forageToggleable(n) { return !!(foragedFood[n] || taggedWater[n] || n == "The River Dycx" || n == "Underground Rivers" || n == "Oasis"); }
 function forageKind(n) { return foragedFood[n] ? "food" : "water"; }
 function forageOverride(n) { var o = character.autoForage; return o ? o[currentLayer + ":" + n] : undefined; }
@@ -1341,7 +1344,7 @@ async function autoForageDay(kind) { // one day's food or water from an automati
 	};
 	return false;
 }
-function toggleAutoForage(n) { // right click on a foraging hotspot; returns the log line
+function toggleAutoForage(n) { // right-click on a foraging hotspot; returns the log line
 	var kind = forageKind(n), want = !forageAutoOn(kind, n);
 	character.autoForage = character.autoForage || {};
 	if (want === forageAutoDefault(kind, n)) delete character.autoForage[currentLayer + ":" + n]; // back to automatic
@@ -2120,7 +2123,7 @@ function wonderUsedUp(n) { // a Wonder with no visit left (the Mirage Vault once
 	return !!(w && w[2] && w[1] >= w[2] + (character.extraVisits[n] || 0));
 }
 function canReactivate(n) { return !!character.raison && character.raison.kind == "wonders" && character.raisonLeft > 0 && !character.dead && !character.ended && wonderUsedUp(n); }
-async function reactivateWonder(n) { // right click on a used-up Wonder (Eternal Return): one of your 3 reactivations gives it one more use; the same Wonder may be reactivated again later
+async function reactivateWonder(n) { // right-click on a used-up Wonder (Eternal Return): one of your 3 reactivations gives it one more use; the same Wonder may be reactivated again later
 	if (!character.raison || character.raison.kind != "wonders") return null;
 	if (character.raisonLeft <= 0) { await uiAlert("Eternal Return: you have no reactivations left."); return null; }
 	if (!wonderUsedUp(n)) { await uiAlert(n + " still has a visit left: there is nothing to reactivate."); return null; }
@@ -2136,13 +2139,13 @@ async function reactivateWonder(n) { // right click on a used-up Wonder (Eternal
 	character.raison.detail = (character.raison.detail ? character.raison.detail + ", " : "") + n;
 	return "Eternal Return: " + n + " reactivated (" + character.raisonLeft + " of 3 left)";
 }
-async function chooseRaison() { // Actions menu at Nadir: the reward is one of three (typed choice); exclusive with L'appel du Vide. Eternal Return and Hardened Husk are spent later (right click a used-up Wonder; the first time a threat strikes)
+async function chooseRaison() { // Actions menu at Nadir: the reward is one of three (typed choice); exclusive with L'appel du Vide. Eternal Return and Hardened Husk are spent later (right-click a used-up Wonder; the first time a threat strikes)
 	if (character.dead || character.ended) return null;
 	if (currentLayer != 10) { await uiAlert("The Raison d'Etre can only be chosen at Nadir."); return null; }
 	if (character.raison) { await uiAlert("You already chose your Raison d'Etre."); return null; }
 	var raisonAns = await uiForm("RAISON D'ETRE: you may take one reward, once. Taking it closes L'appel du Vide for good (you can't have both); you may also take neither (Cancel to decline for now).", [{key: "reward", kind: "radio", options: [
 		{value: "seed", label: "Yggdrasil Seed (the purity gene)", desc: "You need no food or water, ascending costs no corruption, and the Spectre of the End ignores you; but you can't pick up Relics or descend layers."},
-		{value: "return", label: "Eternal Return", desc: "3 reactivations: right click a Wonder you have used up to give it one more use (the same Wonder may be reactivated again)."},
+		{value: "return", label: "Eternal Return", desc: "3 reactivations: right-click a Wonder you have used up to give it one more use (the same Wonder may be reactivated again)."},
 		{value: "husk", label: "Hardened Husk", desc: "3 immunities: the first time a threat would strike you, you may spend one to be immune to it for good."}
 	]}]);
 	if (!raisonAns) return null;
@@ -2153,9 +2156,9 @@ async function chooseRaison() { // Actions menu at Nadir: the reward is one of t
 		return "Raison d'Etre: the Yggdrasil Seed (no food or water needed, the Spectre ignores you; no Relics, no descending, free ascents)";
 	};
 	if (ans == "return" || ans == "eternal return" || ans == "wonders") {
-		if (!await uiConfirm("Take Eternal Return? You get 3 reactivations to spend by right clicking a Wonder you have used up. This is permanent and closes L'appel du Vide.")) return null;
+		if (!await uiConfirm("Take Eternal Return? You get 3 reactivations to spend by right-clicking a Wonder you have used up. This is permanent and closes L'appel du Vide.")) return null;
 		character.raison = {kind: "wonders", detail: ""}; character.raisonLeft = 3;
-		return "Raison d'Etre: Eternal Return (3 reactivations, right click a used-up Wonder)";
+		return "Raison d'Etre: Eternal Return (3 reactivations, right-click a used-up Wonder)";
 	};
 	if (ans == "husk" || ans == "hardened husk" || ans == "threats") {
 		if (!await uiConfirm("Take the Hardened Husk? You get 3 immunities, each spent the first time a threat would strike you (you can decline each time). This is permanent and closes L'appel du Vide.")) return null;
@@ -2383,7 +2386,7 @@ async function useGranite() { // 5 uses in total: each strengthens one Relic (th
 async function useManagedMisfortune(cmdText) { // cmdText (optional) replaces the prompt, e.g. from a shift-click on a Curse
 	if (!has("relics", "Managed Misfortune")) { await uiAlert("You don't have Managed Misfortune!"); return null; }
 	var cmd, cname;
-	if (cmdText !== undefined) { // from a right click on a Curse: "store <curse>"
+	if (cmdText !== undefined) { // from a right-click on a Curse: "store <curse>"
 		var m = String(cmdText).trim().match(/^(store|on|off|drop)\s+(.+)$/i);
 		if (!m) return null;
 		cmd = m[1].toLowerCase(); cname = m[2].trim();
@@ -2612,6 +2615,7 @@ async function takeAction(obj) {
 		character.frac.food2 = 0;
 		character.layerStartDay = character.days;
 		character.counters = {};
+		character.elderDays = 0; character.aberrations = 0; character.dragonsBeaten = 0; character.dragonAdapted = false; // ruled: what belongs to the layer's own creatures starts over on every visit (Spectre of the End, Inanis Ego, detentions, trap columns and jinxed flame belong to you and stay)
 		character.atPool = false;
 		character.cherryWindow = (character.visitedLayers.indexOf(+name) < 0 && +name >= 1 && +name <= 9) ? {layer: +name, rolls: 0, open: true} : null;
 		if (character.visitedLayers.indexOf(+name) < 0) character.visitedLayers.push(+name);
@@ -2639,11 +2643,12 @@ async function takeAction(obj) {
 	} else if (type == "foraging") {
 		if (currentLayer == 7) {
 		if (laborJobs[name]) { // you say how many days you work and how much you are paid (up to the maximum); tax, food and water still apply
-			var maxPay = laborJobs[name];
+			var paidSoFar = (character.counters.labor || {})[name] || 0; // ruled: the maximum pay of a job is per visit to layer 7 (the counters reset on leaving the layer)
+			var maxPay = Math.max(0, laborJobs[name] - paidSoFar);
 			var helper = laborRelics[name] && hasRelic(laborRelics[name]) ? laborRelics[name] : null;
 				var jobAns = await uiForm(name + ": tax, food and water still apply." + (helper ? " Your " + helper + " can trivialize this job." : ""), [
 					{key: "days", kind: "number", label: "Days you work", min: 0, step: 1, def: helper ? 0 : 1},
-					{key: "pay", kind: "number", label: "Dubloons you were paid (0 to " + maxPay + "; blank = " + (name == "Energy Generator" ? "4 per day worked" : "0") + ")", min: 0, max: maxPay, step: 1, optional: true}
+					{key: "pay", kind: "number", label: "Dubloons you were paid (0 to " + maxPay + (paidSoFar ? ", " + paidSoFar + " of " + laborJobs[name] + " already paid on this visit" : "") + "; blank = " + (name == "Energy Generator" ? "4 per day worked" : "0") + ")", min: 0, max: maxPay, step: 1, optional: true}
 				]);
 				if (!jobAns) return;
 				var workDays = Math.floor(jobAns.days);
@@ -2651,7 +2656,7 @@ async function takeAction(obj) {
 				var pay = jobAns.pay === null ? defPay : Math.floor(jobAns.pay);
 				pay = Math.min(pay, maxPay);
 			if (!await timeHandler(workDays, false)) return; // work time is not travel
-			if (!character.dead) gainDoubloons(pay);
+			if (!character.dead) { gainDoubloons(pay); character.counters.labor = character.counters.labor || {}; character.counters.labor[name] = paidSoFar + pay; }
 			name += ", " + workDays + " days, " + pay + " dubloons";
 			}
 		} else {
@@ -3056,7 +3061,7 @@ async function takeAction(obj) {
 			else if (name.search("Water") == 0) { character.water[0] += 1; }
 			else if (name.search("Flask") == 0) { 
 				character.flasks += 1;
-				character.water[1] += 1; // the flask comes filled (the vending machine's right click refills an empty one for 1 doubloon)
+				character.water[1] += 1; // the flask comes filled (the vending machine's right-click refills an empty one for 1 doubloon)
 				if (name.search("vending") + 1) character.itemWeight += 0.8; // the vending flask's price list weight is the empty flask
 			} else if (name == "Ward Water") { character.water[2] += 1; }
 			else character.items.push(name);
@@ -3306,12 +3311,12 @@ function refusalReason(id, n) { // null if clicking the hotspot would do somethi
 function mmHint(cname) { // tooltip line for a Curse hotspot while you hold Managed Misfortune (shown even when the normal click is refused: a companion could use it)
 	if (!has("relics", "Managed Misfortune") || character.dead || character.ended) return null;
 	var marble = character.marbles.find(function(x) { return x.name == cname; });
-	if (marble) return "Stored in Managed Misfortune: right click to switch it " + (marble.on ? "off" : "on") + ".";
+	if (marble) return "Stored in Managed Misfortune: right-click to switch it " + (marble.on ? "off" : "on") + ".";
 	if (WONDER_PROOF.indexOf(cname) >= 0 || has("curses", cname) || has("unselectableCurses", cname)) return null; // already accepted, or can't be stored
 	if (character.marbles.length >= 2) return "Both Managed Misfortune marbles are full. To free one: Actions menu, Relic, Managed Misfortune, then type: drop <Curse>.";
-	return "Right click to store in Managed Misfortune.";
+	return "Right-click to store in Managed Misfortune.";
 }
-async function rightClickCurse(cname) { // right click: store the Curse in a free marble (no corruption); on a stored Curse it switches it on or off
+async function rightClickCurse(cname) { // right-click: store the Curse in a free marble (no corruption); on a stored Curse it switches it on or off
 	if (character.dead || character.ended || !has("relics", "Managed Misfortune")) return;
 	var marble = character.marbles.find(function(x) { return x.name == cname; });
 	var e = await useManagedMisfortune(marble ? (marble.on ? "off " : "on ") + cname : "store " + cname);
@@ -3326,39 +3331,40 @@ function vendFillReason() { // why the vending machine can't fill a flask of you
 	if (character.doubloons < 1 && !compOn("Cloud")) return "Not enough dubloons (needs 1).";
 	return null;
 }
-async function fillVendingFlask() { // right click on the vending Flask: 1 doubloon fills an empty flask
+async function fillVendingFlask() { // right-click on the vending Flask: 1 doubloon fills an empty flask
 	if (vendFillReason()) { await uiAlert(vendFillReason()); return null; }
 	if (!await doubloonHandler(1, 1)) return null;
 	character.water[1] += 1;
 	character.itemWeight += 0.8;
 	return "Item: Flask (vending), filled an empty flask for 1 doubloon";
 }
-async function rightClickOverlayRaw(el, ev) { // returns false (no browser menu) only when the right click was used
+async function rightClickOverlayRaw(el, ev) { // returns false (no browser menu) only when the right-click was used
 	if (el.id.indexOf("foraging:") == 0 && forageToggleable(el.id.substring(9)) && !character.dead && !character.ended) { // auto-foraging on/off (even when it has a side effect)
 		get('log').value += "*" + toggleAutoForage(el.id.substring(9)) + "\n"; updateInfo();
-		if (el.parentNode) hoverOverlay(el, ev);
+		refreshTip(el, ev);
 		return false;
 	};
 	if (el.id == "item:Flask (vending)" && !character.dead && !character.ended) { // fill one of your empty flasks for 1 doubloon
 		var fl = await fillVendingFlask();
 		if (fl) { get('log').value += "-" + fl + "\n"; updateInfo(); }
-		if (el.parentNode) hoverOverlay(el, ev);
+		refreshTip(el, ev);
 		return false;
 	};
 	if (el.id.indexOf("wonder:") == 0 && character.raison && character.raison.kind == "wonders") { // Eternal Return
 		var rw = await reactivateWonder(el.id.substring(7));
 		if (rw) { get('log').value += "-" + rw + "\n"; updateInfo(); }
-		if (el.parentNode) hoverOverlay(el, ev);
+		refreshTip(el, ev);
 		return false;
 	};
 	if (el.id.indexOf("curse:") != 0 || !has("relics", "Managed Misfortune")) return true;
 	await rightClickCurse(el.id.substring(6));
-	if (el.parentNode) hoverOverlay(el, ev);
+	refreshTip(el, ev);
 	return false;
 }
-async function clickOverlay(el, ev) { // a click takes the Curse (or acts); a red hotspot ignores the left click (no alert): the hover tooltip already gave the reason. Right clicks have their own handler and still work on red.
+async function clickOverlay(el, ev) { // a click takes the Curse (or acts); a red hotspot ignores the left click (no alert): the hover tooltip already gave the reason. Right-clicks have their own handler and still work on red.
+	if (el.id == "wonder:Vend-o-matic 6900") return; // nothing to do here: no action, no undo step, no log line
 	if (!refusalReason(el.id, currentLayer)) await withUndo(async function() { await takeAction(el.id); });
-	if (el.parentNode) hoverOverlay(el, ev);
+	refreshTip(el, ev);
 }
 function costPreview(id) { // tooltip lines "Time cost: X days" / "Corruption cost: Y" with today's bonuses (side-effect free; only options that cost time or corruption; no Torch, Energy Rations, Override or Daedalus flight, which need a choice)
 	if (character.dead || character.ended || character.pendingArrival) return null;
@@ -3393,11 +3399,17 @@ function costPreview(id) { // tooltip lines "Time cost: X days" / "Corruption co
 	return out.length ? out.join("\n") : null;
 }
 function hoverOverlay(el, ev) { // pointing at a hotspot: red + not-allowed + the reason if it would be refused now, otherwise the normal green
-	var reason = refusalReason(el.id, currentLayer), hint = el.id.indexOf("curse:") == 0 ? mmHint(el.id.substring(6)) : (el.id.indexOf("foraging:") == 0 ? forageAutoHint(el.id.substring(9)) : el.id.indexOf("wonder:") == 0 && canReactivate(el.id.substring(7)) ? "Right click to reactivate (Eternal Return: " + character.raisonLeft + " of 3 left)." : el.id == "item:Flask (vending)" ? "Right click: fill an empty flask for 1 doubloon" + (vendFillReason() ? " (not possible now: " + vendFillReason().replace(/\.$/, "") + ")." : ".") : el.id == "wonder:Mirage Vault" && vaultErrandPossible() ? "Click to choose a companion to leave here to collect it (you lose them and their bonuses until you return); Cancel leaves nobody." : null);
+	var reason = refusalReason(el.id, currentLayer), hint = el.id.indexOf("curse:") == 0 ? mmHint(el.id.substring(6)) : (el.id.indexOf("foraging:") == 0 ? forageAutoHint(el.id.substring(9)) : el.id.indexOf("wonder:") == 0 && canReactivate(el.id.substring(7)) ? "Right-click to reactivate (Eternal Return: " + character.raisonLeft + " of 3 left)." : el.id == "item:Flask (vending)" ? "Right-click: fill an empty flask for 1 doubloon" : el.id == "wonder:Mirage Vault" && vaultErrandPossible() ? "Click to choose a companion to leave here to collect it (you lose them and their bonuses until you return); Cancel leaves nobody." : null);
 	if (el.classList) el.classList.toggle("blocked", !!reason);
 	var cost = costPreview(el.id), txt = reason ? (hint ? reason + (el.id.indexOf("foraging:") == 0 ? "\n" : " ") + hint : reason) : hint;
 	if (cost) txt = txt ? txt + "\n" + cost : cost;
+	if (txt) txt = txt.split("\n").map(function(l) { return /\.$/.test(l) && l.slice(0, -1).indexOf(". ") < 0 ? l.slice(0, -1) : l; }).join("\n"); // a single sentence takes no final period
 	showTip(txt, ev, !reason); // a hint alone has a green border
+}
+function refreshTip(el, ev) { // after an action (and its dialogs): show the tooltip again only if the pointer is still over this hotspot, otherwise hide it (it would linger until another tooltip appeared)
+	var over = false;
+	try { over = !!(el && el.parentNode && el.matches && el.matches(":hover")); } catch (e) {}
+	if (over) hoverOverlay(el, ev); else hideTip();
 }
 function showTip(text, ev, info) {
 	var t = get('tip');
@@ -3437,7 +3449,7 @@ function renderOverlay(n) {
 	get('pageContainer').innerHTML = overlay;
 }
 
-// ---- Undo, save and load (step BG). Every user action (a click, a right click, an Actions-menu entry, a page jump) runs inside withUndo: the state before it is
+// ---- Undo, save and load (step BG). Every user action (a click, a right-click, an Actions-menu entry, a page jump) runs inside withUndo: the state before it is
 // pushed on an unlimited stack when the action changed anything. A snapshot holds `character`, the Wonder visit counts, currentLayer, vodFollowers, lastTripDays and the log text.
 // Random rolls are not stored: undoing and repeating an action may give a different die result (ruled).
 var undoStack = [], undoDepth = 0, SAVE_KEY = "abyssDiverSave", SAVE_VERSION = 1;
@@ -3534,7 +3546,7 @@ async function doActionMenu() {
 	if (a == "import") return importGame();
 	return await withUndo(doActionRaw);
 }
-function rightClickOverlay(el, ev) { // the browser menu is suppressed (return false) exactly when the right click is used; decided at once, the action itself may wait for dialogs
+function rightClickOverlay(el, ev) { // the browser menu is suppressed (return false) exactly when the right-click is used; decided at once, the action itself may wait for dialogs
 	var used = (el.id == "item:Flask (vending)" && !character.dead && !character.ended) || (el.id.indexOf("wonder:") == 0 && character.raison && character.raison.kind == "wonders") || (el.id.indexOf("curse:") == 0 && has("relics", "Managed Misfortune")) || (el.id.indexOf("foraging:") == 0 && forageToggleable(el.id.substring(9)) && !character.dead && !character.ended);
 	if (used && ev && ev.preventDefault) ev.preventDefault();
 	withUndo(async function() { return await rightClickOverlayRaw(el, ev); });
@@ -3570,6 +3582,7 @@ function applyPackage(txt) { // validates a save package and replaces the game w
 	if (pkg.version > SAVE_VERSION) return false;
 	restoreState(pkg.state, pkg.log);
 	undoStack = Array.isArray(pkg.undo) ? pkg.undo : [];
+	refreshMenu(); // restoreState built the menu while undoStack was still the old one: rebuild so "Undo last action" shows after resume/load/import
 	return true;
 }
 async function loadGame() {
