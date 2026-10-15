@@ -212,19 +212,209 @@ hr {
 }
 #dlgButtons button:hover { border-color : orange; }
 #dlgButtons button:focus { outline : 2px solid orange; }
+#dlgButtons button:disabled { opacity : 0.4; cursor : not-allowed; }
+#dlgFields { margin-top : 6px; }
+.dlgRow {
+	display : flex;
+	align-items : center;
+	gap : 10px;
+	margin-top : 10px;
+}
+.dlgField { flex : 1 1 0; min-width : 0; }
+.dlgCountRow { display : flex; align-items : center; justify-content : space-between; gap : 8px; margin-top : 4px; }
+.dlgCountRow input[type=number] { width : 76px; flex : 0 0 auto; }
+.dlgLabel { font-size : 12px; color : #bbb; margin-bottom : 3px; }
+.dlgLine { display : flex; align-items : center; gap : 6px; margin-top : 6px; }
+.dlgField .dlgLine select { flex : 1 1 0; width : auto; min-width : 0; }
+.dlgField .dlgLine input[type=number] { flex : 0 0 auto; width : 76px; }
+.dlgLine button, .dlgAdd {
+	padding : 5px 10px;
+	background : #333;
+	color : #fff;
+	border : 1px solid gray;
+	border-radius : 4px;
+	font-family : inherit;
+	font-size : 14px;
+	cursor : pointer;
+}
+.dlgLine button:hover, .dlgAdd:hover { border-color : orange; }
+.dlgLine button:focus, .dlgAdd:focus { outline : 2px solid orange; }
+.dlgAdd { margin-top : 8px; }
+.dlgAdd:disabled { opacity : 0.4; cursor : not-allowed; }
+.dlgField select, .dlgField input[type=text], .dlgField input[type=number] {
+	box-sizing : border-box;
+	width : 100%;
+	padding : 6px 8px;
+	background : #111;
+	color : #fff;
+	border : 1px solid gray;
+	border-radius : 4px;
+	font-family : inherit;
+	font-size : 14px;
+}
+.dlgField select:focus, .dlgField input:focus { outline : 2px solid orange; }
+.dlgArrow { flex : 0 0 auto; font-size : 26px; line-height : 1; color : orange; }
+.dlgOpt {
+	display : flex;
+	align-items : flex-start;
+	gap : 8px;
+	margin-top : 6px;
+	padding : 7px 9px;
+	border : 1px solid #555;
+	border-radius : 4px;
+	cursor : pointer;
+}
+.dlgOpt:hover, .dlgOpt.sel { border-color : orange; }
+.dlgOpt.sel { background : #2e2a20; }
+.dlgOpt input { margin-top : 3px; }
+.dlgOptText b { font-weight : bold; }
+.dlgOptDesc { margin-top : 2px; font-size : 13px; color : #ccc; line-height : 1.35; white-space : pre-wrap; }
+#dlgError { margin-top : 10px; color : #ff8c8c; white-space : pre-wrap; }
+@media (max-width : 480px) {
+	.dlgRow { flex-direction : column; align-items : stretch; }
+	.dlgArrow { align-self : center; transform : rotate(90deg); }
+}
 </style>
 <script type="text/javascript">
-// Last modified: 2026-10-12 22:17 UTC (left click on a red hotspot is ignored instead of showing an alert)
+// Last modified: 2026-10-15 00:34:52 UTC (the browser save now includes the undo history, so Undo works after resuming)
 var dialogOpen = false, dialogQueue = [];
-function dialogRun(kind, text, def) {
-	return new Promise(function(resolve) {
-		dialogQueue.push({kind: kind, text: String(text), def: def, resolve: resolve});
+// Every dialog except a plain OK notice has a Cancel button. Cancel throws DLG_CANCEL, which withUndo() catches: the whole action that opened the dialog is rolled back as if it had never been clicked
+// (time, food, corruption and log lines included), so Cancel never silently picks an answer. Questions with a real "no" answer have their own button for it.
+var DLG_CANCEL = {dialogCancelled: true};
+function dialogRun(kind, text, def, extra) {
+	return new Promise(function(resolve, reject) {
+		dialogQueue.push({kind: kind, text: String(text), def: def, extra: extra, resolve: resolve, reject: reject});
 		if (!dialogOpen) dialogNext();
 	});
 }
 function uiAlert(text) { return dialogRun("alert", text); }
-function uiConfirm(text) { return dialogRun("confirm", text); }
+function uiConfirm(text, yesLabel, noLabel) { return dialogRun("confirm", text, undefined, {yes: yesLabel, no: noLabel}); } // true = yes/OK. With a noLabel it is a real question: [Cancel] [No] [Yes] (false = No); without one it is [Cancel] [OK]
 function uiPrompt(text, def) { return dialogRun("prompt", text, def); }
+// uiForm(text, fields, check): one dialog with several fields. Resolves to {key: value, ...} on OK; Cancel aborts the action (see DLG_CANCEL).
+// fields: a list of rows. A row is a field object, or an array of them side by side; a string inside such an array is drawn between the fields as an arrow (e.g. [curseField, "→", companionField]).
+// field: {key, kind: "select" | "radio" | "check" | "number" | "text", label, options: [value | {value, label, desc}], def, none: "label of a 'nothing' option (value \"\")", min, max, step, optional}
+//   counts: a list of options, each with its own number box (option.max, default field.max or 99); returns {value: n} for every n > 0.
+//   select (long lists: Relics, Curses, items) and radio (everything else, up to about 10 options, each may carry a desc) return the chosen option's value; check returns an array of values; number returns a Number; text a trimmed string.
+//   Without a def or a none option nothing is chosen yet and OK stays disabled. An empty select/radio list also keeps OK disabled (callers should explain that before opening the dialog).
+// check(values): optional; returns a message to show (and keep OK disabled) while the combination is not allowed, {info: "text"} for a note that leaves OK enabled, or a falsy value.
+function uiForm(text, fields, check) { return dialogRun("form", text, undefined, {fields: fields, check: check}); }
+var dlgRadioCount = 0;
+function dlgBuildField(f, refresh) {
+	var wrap = document.createElement("div"); wrap.className = "dlgField";
+	if (f.label) { var lb = document.createElement("div"); lb.className = "dlgLabel"; lb.textContent = f.label; wrap.appendChild(lb); }
+	var opts = (f.options || []).map(function(o) { return (o !== null && typeof o == "object") ? o : {value: o, label: String(o)}; });
+	if (f.none !== undefined) opts.unshift({value: "", label: f.none});
+	var defIdx = -1;
+	opts.forEach(function(o, i) { if (defIdx < 0 && f.def !== undefined && o.value === f.def) defIdx = i; });
+	if (defIdx < 0 && f.none !== undefined) defIdx = 0;
+	var res = {key: f.key, el: wrap, focus: null};
+	var kind = f.kind || "select";
+	if (kind == "select") {
+		var s = document.createElement("select");
+		if (defIdx < 0) { var ph = document.createElement("option"); ph.value = "-1"; ph.textContent = opts.length ? "— choose —" : "— none available —"; s.appendChild(ph); }
+		opts.forEach(function(o, i) { var e = document.createElement("option"); e.value = String(i); e.textContent = o.label; s.appendChild(e); });
+		if (defIdx >= 0) s.value = String(defIdx);
+		s.disabled = !opts.length;
+		s.onchange = refresh;
+		wrap.appendChild(s); res.focus = s;
+		res.ok = function() { return !!f.optional || parseInt(s.value, 10) >= 0; };
+		res.get = function() { var i = parseInt(s.value, 10); return i >= 0 ? opts[i].value : null; };
+	} else if (kind == "counts") {
+		var cins = [];
+		opts.forEach(function(o) {
+			var cr = document.createElement("div"); cr.className = "dlgCountRow";
+			var cl = document.createElement("span"); cl.textContent = o.label; cr.appendChild(cl);
+			var ci = document.createElement("input"); ci.type = "number"; ci.min = 0; ci.step = 1; ci.autocomplete = "off";
+			var cmax = o.max !== undefined ? o.max : (f.max !== undefined ? f.max : 99);
+			ci.max = cmax; ci.value = "0"; ci.disabled = cmax < 1;
+			ci.oninput = refresh; cr.appendChild(ci); wrap.appendChild(cr); cins.push({o: o, el: ci, max: cmax});
+		});
+		res.focus = cins.filter(function(c) { return !c.el.disabled; })[0] ? cins.filter(function(c) { return !c.el.disabled; })[0].el : null;
+		function cval(c) { var v = c.el.value.trim(); return v === "" ? 0 : Number(v); }
+		res.ok = function() { return cins.every(function(c) { var n = cval(c); return isFinite(n) && n >= 0 && n <= c.max && Math.floor(n) === n; }); };
+		res.get = function() { var r = {}; cins.forEach(function(c) { var n = cval(c); if (isFinite(n) && n > 0) r[c.o.value] = n; }); return r; };
+	} else if (kind == "lines") { // a growing list of rows [select (+ quantity)] [x]; the "add" button appends a row; an option can be chosen in one row only
+		var hasQty = f.qty !== false, lrows = [], listEl = document.createElement("div");
+		wrap.appendChild(listEl);
+		var addBtn = document.createElement("button"); addBtn.type = "button"; addBtn.className = "dlgAdd"; addBtn.textContent = f.addLabel || "Add";
+		function optMax(i) { return i < 0 ? 0 : (opts[i].max !== undefined ? opts[i].max : 99); }
+		function linesSync() {
+			lrows.forEach(function(r) {
+				Array.prototype.forEach.call(r.sel.options, function(op) {
+					if (op.value == "-1") return;
+					op.disabled = optMax(parseInt(op.value, 10)) < 1 || lrows.some(function(o) { return o !== r && o.sel.value == op.value; });
+				});
+				if (r.qty) { r.qty.max = optMax(parseInt(r.sel.value, 10)); r.qty.disabled = r.sel.value == "-1"; }
+			});
+			addBtn.disabled = lrows.length >= opts.filter(function(o, i) { return optMax(i) >= 1; }).length;
+		}
+		function addLine() {
+			var lr = document.createElement("div"); lr.className = "dlgLine";
+			var s2 = document.createElement("select");
+			var ph2 = document.createElement("option"); ph2.value = "-1"; ph2.textContent = "\u2014 choose \u2014"; s2.appendChild(ph2);
+			opts.forEach(function(o, i) { var e = document.createElement("option"); e.value = String(i); e.textContent = o.label; s2.appendChild(e); });
+			lr.appendChild(s2);
+			var row2 = {sel: s2, qty: null, el: lr};
+			if (hasQty) {
+				var q2 = document.createElement("input"); q2.type = "number"; q2.min = 1; q2.step = 1; q2.autocomplete = "off"; q2.value = "1"; q2.disabled = true;
+				q2.oninput = refresh; lr.appendChild(q2); row2.qty = q2;
+			}
+			s2.onchange = function() { if (row2.qty && s2.value != "-1" && row2.qty.value.trim() === "") row2.qty.value = "1"; linesSync(); refresh(); };
+			var x2 = document.createElement("button"); x2.type = "button"; x2.textContent = "\u2715"; x2.title = "Remove this row";
+			x2.onclick = function() { lrows.splice(lrows.indexOf(row2), 1); listEl.removeChild(lr); if (!lrows.length) addLine(); linesSync(); refresh(); };
+			lr.appendChild(x2);
+			listEl.appendChild(lr); lrows.push(row2);
+			linesSync();
+			return row2;
+		}
+		addBtn.onclick = function() { var nr = addLine(); nr.sel.focus(); refresh(); };
+		wrap.appendChild(addBtn);
+		addLine();
+		res.focus = lrows[0].sel;
+		function qtyOf(r) { var v = r.qty.value.trim(); return v === "" ? NaN : Number(v); }
+		res.ok = function() { return lrows.every(function(r) { if (r.sel.value == "-1" || !r.qty) return true; var n = qtyOf(r); return isFinite(n) && Math.floor(n) === n && n >= 1 && n <= optMax(parseInt(r.sel.value, 10)); }); };
+		res.get = function() {
+			var chosen = lrows.filter(function(r) { return r.sel.value != "-1"; });
+			if (!hasQty) return chosen.map(function(r) { return opts[parseInt(r.sel.value, 10)].value; });
+			var out = {};
+			chosen.forEach(function(r) { var n = qtyOf(r); if (isFinite(n) && n > 0) { var k = opts[parseInt(r.sel.value, 10)].value; out[k] = (out[k] || 0) + n; } });
+			return out;
+		};
+	} else if (kind == "radio" || kind == "check") {
+		var isRadio = kind == "radio", name = "dlgGroup" + (++dlgRadioCount), ins = [];
+		opts.forEach(function(o, i) {
+			var lab = document.createElement("label"); lab.className = "dlgOpt";
+			var inp = document.createElement("input"); inp.type = isRadio ? "radio" : "checkbox"; inp.name = name; inp.value = String(i);
+			if (isRadio ? i == defIdx : (f.def || []).indexOf(o.value) >= 0) inp.checked = true;
+			var tx = document.createElement("div"); tx.className = "dlgOptText";
+			var b = document.createElement("b"); b.textContent = o.label; tx.appendChild(b);
+			if (o.desc) { var ds = document.createElement("div"); ds.className = "dlgOptDesc"; ds.textContent = o.desc; tx.appendChild(ds); }
+			lab.appendChild(inp); lab.appendChild(tx); wrap.appendChild(lab); ins.push(inp);
+		});
+		function mark() { ins.forEach(function(inp) { inp.parentNode.className = "dlgOpt" + (inp.checked ? " sel" : ""); }); }
+		ins.forEach(function(inp) { inp.onchange = function() { mark(); refresh(); }; });
+		mark();
+		res.focus = ins.filter(function(i) { return i.checked; })[0] || ins[0] || null;
+		res.ok = isRadio ? function() { return ins.some(function(i) { return i.checked; }); } : function() { return true; };
+		res.get = isRadio ? function() { var c = ins.filter(function(i) { return i.checked; })[0]; return c ? opts[parseInt(c.value, 10)].value : null; }
+			: function() { return ins.filter(function(i) { return i.checked; }).map(function(i) { return opts[parseInt(i.value, 10)].value; }); };
+	} else { // number or text
+		var inp2 = document.createElement("input"); inp2.type = kind == "number" ? "number" : "text"; inp2.autocomplete = "off";
+		if (kind == "number") { if (f.min !== undefined) inp2.min = f.min; if (f.max !== undefined) inp2.max = f.max; inp2.step = f.step === undefined ? 1 : f.step; }
+		inp2.value = (f.def === undefined || f.def === null) ? "" : String(f.def);
+		inp2.oninput = refresh;
+		wrap.appendChild(inp2); res.focus = inp2;
+		res.ok = function() {
+			var v = inp2.value.trim();
+			if (v === "") return !!f.optional;
+			if (kind != "number") return true;
+			var n = Number(v);
+			return isFinite(n) && (f.min === undefined || n >= f.min) && (f.max === undefined || n <= f.max);
+		};
+		res.get = kind == "number" ? function() { var v = inp2.value.trim(); return v === "" ? null : Number(v); } : function() { return inp2.value.trim(); };
+	};
+	return res;
+}
 window.alert = uiAlert; window.confirm = uiConfirm; window.prompt = uiPrompt; // Override code typed into the game gets the same dialogs
 function dialogNext() {
 	var d = dialogQueue.shift();
@@ -239,6 +429,31 @@ function dialogNext() {
 		input.value = (d.def === undefined || d.def === null) ? "" : String(d.def);
 		box.appendChild(input);
 	};
+	var getters = [], firstFocus = null, errBox = null, ok;
+	function refresh() { // form dialogs: OK is enabled only while every field has a valid value and the optional check() has no objection
+		var vals = {}, allOk = true;
+		getters.forEach(function(g) { vals[g.key] = g.get(); if (!g.ok()) allOk = false; });
+		var err = allOk && d.extra.check ? d.extra.check(vals) : "";
+		var info = (err && typeof err == "object") ? err.info : "";
+		if (info) err = "";
+		errBox.textContent = err || info || "";
+		errBox.style.color = info ? "#ccc" : "";
+		ok.disabled = !allOk || !!err;
+	}
+	if (d.kind == "form") {
+		var fieldsBox = document.createElement("div"); fieldsBox.id = "dlgFields";
+		d.extra.fields.forEach(function(item) {
+			var frow = document.createElement("div"); frow.className = "dlgRow";
+			(Array.isArray(item) ? item : [item]).forEach(function(f) {
+				if (typeof f == "string") { var ar = document.createElement("div"); ar.className = "dlgArrow"; ar.textContent = f; frow.appendChild(ar); return; }
+				var g = dlgBuildField(f, refresh); frow.appendChild(g.el); getters.push(g);
+				if (!firstFocus && g.focus) firstFocus = g.focus;
+			});
+			fieldsBox.appendChild(frow);
+		});
+		box.appendChild(fieldsBox);
+		errBox = document.createElement("div"); errBox.id = "dlgError"; box.appendChild(errBox);
+	};
 	var row = document.createElement("div"); row.id = "dlgButtons";
 	var done = false;
 	var prevFocus = document.activeElement, others = [];
@@ -249,7 +464,7 @@ function dialogNext() {
 		back.parentNode && back.parentNode.removeChild(back);
 		others.forEach(function(c) { c.inert = false; });
 		try { if (prevFocus && prevFocus.focus && document.contains(prevFocus)) prevFocus.focus(); } catch (e) {}
-		d.resolve(result);
+		if (result === DLG_CANCEL) d.reject(DLG_CANCEL); else d.resolve(result);
 		dialogNext();
 	}
 	function button(label, result) {
@@ -257,24 +472,34 @@ function dialogNext() {
 		b.onclick = function() { finish(typeof result == "function" ? result() : result); };
 		row.appendChild(b); return b;
 	}
-	var ok;
+	var cancelBtn = null;
 	if (d.kind == "alert") ok = button("OK", undefined);
-	else if (d.kind == "confirm") { button("Cancel", false); ok = button("OK", true); }
-	else { button("Cancel", null); ok = button("OK", function() { return input.value; }); }
+	else if (d.kind == "confirm") {
+		cancelBtn = button("Cancel", DLG_CANCEL);
+		if (d.extra.no) button(d.extra.no, false);
+		ok = button(d.extra.yes || (d.extra.no ? "Yes" : "OK"), true);
+	}
+	else if (d.kind == "form") {
+		cancelBtn = button("Cancel", DLG_CANCEL);
+		ok = button("OK", function() { var vals = {}; getters.forEach(function(g) { vals[g.key] = g.get(); }); return vals; });
+	}
+	else { cancelBtn = button("Cancel", DLG_CANCEL); ok = button("OK", function() { return input.value; }); }
 	box.appendChild(row); back.appendChild(box); document.body.appendChild(back);
 	Array.prototype.forEach.call(document.body.children, function(c) { if (c !== back && !c.inert) { c.inert = true; others.push(c); } }); // the page behind can't be clicked, focused or reached by access keys
 	function onKey(e) {
 		if (e.key == "Escape") { e.preventDefault(); e.stopPropagation(); return; } // not a way out
 		if (e.key == "Enter" && input && e.target === input) { e.preventDefault(); finish(input.value); return; }
+		if (e.key == "Enter" && d.kind == "form" && e.target.tagName == "INPUT" && e.target.type != "checkbox") { e.preventDefault(); if (!ok.disabled) ok.click(); return; }
 		if (e.key == "Tab") { // keep the focus inside the dialog
-			var f = Array.prototype.slice.call(box.querySelectorAll("input, button")), i = f.indexOf(document.activeElement);
+			var f = Array.prototype.slice.call(box.querySelectorAll("input:not(:disabled), select:not(:disabled), button:not(:disabled)")), i = f.indexOf(document.activeElement);
 			if (!f.length) return;
 			e.preventDefault();
 			f[(i + (e.shiftKey ? f.length - 1 : 1)) % f.length].focus();
 		}
 	}
 	document.addEventListener("keydown", onKey, true);
-	if (input) { input.focus(); input.select(); } else ok.focus();
+	if (d.kind == "form") { refresh(); (firstFocus || (ok.disabled && cancelBtn ? cancelBtn : ok)).focus(); }
+	else if (input) { input.focus(); input.select(); } else ok.focus();
 }
 function get(id) { return document.getElementById(id); }
 function showHideNav(show) { // show: true/false forces the state, no argument toggles. Full mode: the layer list (each with its jump submenu); jump mode: only the current page's jump list
@@ -313,7 +538,7 @@ if (document.addEventListener) document.addEventListener("keydown", function(e) 
 	if (e.altKey && e.code == "KeyS" && !e.ctrlKey && !e.metaKey) { // Alt+S: switch between the full menu and the jump-list-only menu
 		e.preventDefault();
 		navJumpOnly = !navJumpOnly; // dev mode = the full menu (navJumpOnly false); it also shows the Override entry of the Actions menu
-		showHideNav(true);
+		//showHideNav(true);
 		refreshMenu();
 	}
 });
@@ -750,8 +975,8 @@ var character = {
 	"twin" : false, // Double Trouble: your twin is alive (see hasTwin)
 	"captives" : 0, // Opportunistic Bandits you captured and carry (60 kg each), kept for the Bloodstained Sanctuary
 	"agingStopped" : false, // Fountain of Youth: the first drink stops aging for good
-	"boundless" : null, // Boundless Space: {relic, x}, the one Relic whose range is set between 1x and 100x (ranges aren't tracked by the game)
-	"endless" : null, // Endless Time: {relic, pct}, the one Relic whose time is set between 1% and 100% of its default (times aren't tracked by the game)
+	"boundless" : null, // Boundless Space: {relic}, the one Relic whose range is boosted (ranges aren't tracked by the game: only the choice is logged)
+	"endless" : null, // Endless Time: {relic}, the one Relic whose time is boosted (times aren't tracked by the game: only the choice is logged)
 	"literalForm" : null, // Literalization: the form you took (mammal, reptile or dragon, insect or arachnid, plant, demon, fish, tentacle beast)
 	"healDay" : -1, // Lifespanner: the day its 7 heals were last counted
 	"healsUsed" : 0, // Lifespanner heals used on that day (7 per day)
@@ -775,12 +1000,15 @@ var character = {
 	"granite" : [], // Granted Granite: the shapes (original Relics) it has strengthened; at most 5 uses, stays with the shape when the Forge swaps abilities
 	"curseBonuses" : {}, // optional bonus corruption taken with a Curse (refunded with it)
 	"frac" : {}, // how much of the unit being eaten or drunk is already used up (Minish-ish needs only 1/4 a day)
+	"autoForage" : {}, // manual auto-foraging overrides, "layer:spot" -> true (always on) / false (always off); no entry = automatic (on exactly while the spot is free)
 	"effects" : {}, // foraging effects taken so far: text -> number of days
 	"trapColumns" : {left : 0, middle : 0, right : 0}, // Relics taken per Booby Trap column (layer 5)
 	"hasStrongLight" : false, // Flashlight, Smartphone, Sunbeam (Moonwatcher is weaker light)
 	"items" : [],
 	"relics" : [],
-	"curses" : [],
+	"escapeFlight" : null, // {from, used}: an Escape Balloon flight in progress (kept while a hop is paused for Curses)
+	"curses" : [], // each Curse appears once
+	"curseLvl" : {}, // level (number of copies taken) of each repeatable Curse (see cursesMultiple); the maximum is the cap
 	"unselectableCurses" : [],
 	"copiedCurses" : [],
 	"foraging" : [],
@@ -805,6 +1033,10 @@ var character = {
 	"location" : "surface",
 	"layerStartDay" : 1
 };
+function relicOptions(list, extra) { // select options {value, label} for a list of Relic names: unique, alphabetical; extra(name) may add a note to the label (e.g. the sell value)
+	return byName(list).map(function(r) { var e = extra ? extra(r) : ""; return {value: r, label: e ? r + " \u2014 " + e : r}; });
+}
+function byName(list) { return list.filter(function(x, i) { return list.indexOf(x) === i; }).sort(function(a, b) { return a.localeCompare(b); }); } // unique, alphabetical copy (for select menus)
 function has(type, object) {
 	return character[type].indexOf(object) >= 0;
 }
@@ -820,6 +1052,16 @@ async function corruptionHandler(cost, isRefund) {
 	};
 	character.corruption -= corruptionCost;
 	return true;
+}
+function crossingCorruptionBlock(name) { // why the corruption of this crossing can't be paid right now (null if it can)
+	if (seedFreeAscent(name) || (name == "9down" && character.atPool)) return null;
+	if (name == "0up" && character.corruption - Math.max(0, portals["0up"][1] - corruptSave() + 5*flameLevel()) < 0) return "You cannot leave the Abyss with negative corruption.";
+	return brokerBlocksCost(portals[name][1] - corruptSave()) ? BROKER_REASON : null;
+}
+async function payCrossingCorruption(name) { // the corruption of a crossing is charged on arrival (after the Curses of a paused crossing), not up front
+	var why = crossingCorruptionBlock(name);
+	if (why) { await uiAlert(why + " (You can still take Curses here to raise your corruption.)"); return false; }
+	return await corruptionHandler(portals[name][1] - corruptSave());
 }
 var SEED_NO_DESCENT = "Yggdrasil Seed: you can no longer descend.", SEED_NO_RELICS = "Yggdrasil Seed: you can no longer pick up Relics.";
 function seedFreeAscent(portalName) { return character.purity && /up$/.test(portalName); } // the Yggdrasil Seed: ascending costs no corruption
@@ -877,10 +1119,10 @@ async function timeHandler(cost, isTravel, opts) {
 			var withBonus = Math.max(0, cost*mult + add - save - dayBonus);
 			var covered = permanent || torchCovers(withBonus);
 			if (!covered && withBonus < without) {
-				if (has("items", "Torch") && await uiConfirm("Light a Torch for this trip? (saves " + dayBonus + " day" + (dayBonus > 1 ? "s" : "") + "; it lasts max(1 day, the trip))")) {
+				if (has("items", "Torch") && await uiConfirm("Light a Torch for this trip?", "Yes", "No")) {
 					lightTorch(withBonus);
 					covered = true;
-				} else if (currentLayer == 4 && character.relics.length > 0 && await uiConfirm("No portable heat source. Override: treat one of your Relics as a heat source for this trip? (saves 2 days)")) {
+				} else if (currentLayer == 4 && character.relics.length > 0 && await pickHeatRelic("for this trip (saves 2 days)")) {
 					covered = true;
 				};
 			};
@@ -889,6 +1131,7 @@ async function timeHandler(cost, isTravel, opts) {
 		};
 		timeCost = Math.max(0, cost*mult + add - save - bonus);
 		character.statuses.forEach(function(st) { st.left -= 1; });
+		character.statuses.filter(function(st) { return st.left <= 0; }).forEach(function(st) { note("Status ended: " + st.name); });
 		character.statuses = character.statuses.filter(function(st) { return st.left > 0; });
 	};
 	timeCost = Math.max(0, timeCost);
@@ -896,13 +1139,13 @@ async function timeHandler(cost, isTravel, opts) {
 	var rationsUsed = 0;
 	if (isTravel && timeCost >= 1 && character.food[1] > 0 && !character.dead) {
 		var maxR = Math.min(character.food[1], timeCost/2);
-		var rAns = await uiPrompt("This trip takes " + timeCost + " days. You have " + character.food[1] + " Energy Rations; each covers 2 days of travel in 1 day, in half-ration steps (up to " + maxR + " for this trip). How many do you want to use? (0 = none, max = " + maxR + ")", "0");
-		var r = /^\s*(max|all)\s*$/i.test(String(rAns)) ? maxR : Math.round(parseFloat(rAns)*2)/2;
+		var rAns = await uiForm("This trip takes " + timeCost + " days. You have " + character.food[1] + " Energy Rations; each covers 2 days of travel in 1 day, in half-ration steps.", [{key: "n", kind: "number", label: "Energy Rations to use (0 = none, up to " + maxR + " for this trip, steps of 0.5)", min: 0, max: maxR, step: 0.5, def: 0}]);
+		var r = rAns ? Math.round(rAns.n*2)/2 : 0;
 		if (r > 0) rationsUsed = Math.min(r, maxR);
 		if (rationsUsed > 0) {
 			character.food[1] -= rationsUsed;
 			character.itemWeight -= 0.5*rationsUsed;
-			note("Energy Rations: " + rationsUsed + " used, so the " + timeCost + "-day trip takes " + (timeCost - rationsUsed) + " days.");
+			note("Energy Rations x" + rationsUsed + ": " + timeCost + "d trip -> " + (timeCost - rationsUsed) + "d");
 		};
 	};
 	// Half-day clock: the trip takes `elapsed` days (possibly x.5); food, water, flame, threats and the Spectre tick each time the clock crosses a whole day.
@@ -954,11 +1197,11 @@ async function cherryLuck() { // first visit to a layer, before any other option
 	for (var guard = 0; guard < 1000 && !got && nTried < list.length; guard++) {
 		var r = list[rollDie(list.length)];
 		if (tried[r]) continue;
-		if (character.devilsOwn > 0 && await uiConfirm("Cherry rolled " + r + ". Use Devil's Own's free reroll? (OK = reroll, Cancel = keep)")) { character.devilsOwn = 0; continue; }
-		var before = (kind == 0) ? character.relics.length + character.devoured.length : character.curses.length;
+		if (character.devilsOwn > 0 && await uiConfirm("Cherry rolled " + r + ". Use Devil's Own's free reroll?", "Reroll", "Keep it")) { character.devilsOwn = 0; continue; }
+		var before = (kind == 0) ? character.relics.length + character.devoured.length : curseCopies();
 		cherryCtx = {kind: kind};
 		try { await takeAction(prefix + r); } finally { cherryCtx = null; }
-		var after = (kind == 0) ? character.relics.length + character.devoured.length : character.curses.length;
+		var after = (kind == 0) ? character.relics.length + character.devoured.length : curseCopies();
 		if (after > before) got = r; else { tried[r] = 1; nTried += 1; } // duplicates, contradictions and anything you can't take are rerolled
 	};
 	if (!got) { await uiAlert("Cherry's luck finds nothing you can take here; the roll is not used."); return null; }
@@ -967,7 +1210,15 @@ async function cherryLuck() { // first visit to a layer, before any other option
 }
 async function sellRelic(viaBalloon, relicName) { // the surface shop (or the Commerce Balloon): a Relic sells for its sell value (+10 with Lily, not by balloon); a Cloud loan is paid first
 	if (!viaBalloon && currentLayer != 0) { await uiAlert("You can only sell Relics to the shop on the surface."); return null; }
-	var r = (relicName !== undefined ? relicName : (await uiPrompt("Sell which Relic? You have: " + character.relics.join(", ")) || "")).trim();
+	var r = relicName;
+	if (r === undefined) {
+		var sellable = character.relics.filter(function(x) { return !(x == "Forbidden Grimoire" && character.grimoireUsed); }); // a used Grimoire can't be sold
+		if (!sellable.length) { await uiAlert("You have no Relic you can sell."); return null; }
+		var sellAns = await uiForm("Sell which Relic?" + (character.loan > 0 ? " The sale pays off your Cloud loan first." : ""), [{key: "relic", kind: "select", label: "Relic", options: relicOptions(sellable, function(x) { return (relicValue(x) + (!viaBalloon && compOn("Lily") ? 10*grimoireFor("Lily") : 0)) + " dubloons"; })}]);
+		if (!sellAns) return null;
+		r = sellAns.relic;
+	};
+	r = String(r).trim();
 	if (!has("relics", r)) { await uiAlert("You don't have that Relic! (Absorbed Relics can't be sold.)"); return null; }
 	if (r == "Forbidden Grimoire" && character.grimoireUsed) { await uiAlert("A used Forbidden Grimoire can't be sold."); return null; }
 	var price = relicValue(r) + (!viaBalloon && compOn("Lily") ? 10*grimoireFor("Lily") : 0); // brought up by you, not by commerce balloon (Lily's haggling doubles with the Grimoire)
@@ -978,15 +1229,12 @@ async function sellRelic(viaBalloon, relicName) { // the surface shop (or the Co
 	gainDoubloons(price - toLoan);
 	return "Sold " + r + " for " + price + " dubloons" + (toLoan > 0 ? " (" + toLoan + " went to your loan)" : "");
 }
-function forcedNote(dflt) { // appended to a prompt that Cherry's luck forces: a choice must be made, so cancelling or an invalid answer picks the default
-	return "\n\nCherry's luck forces this Curse on you, so a choice has to be made: if you cancel or type something invalid, \"" + dflt + "\" is chosen for you.";
-}
-async function chooseHeightDir(forced) { // the first height change decides the direction; every later one follows it (with Dizzying Heights both changes must go the same way); forced (Flairabou: you must eat) = cancelling or an invalid answer picks taller
+async function chooseHeightDir(forced) { // the first height change decides the direction; every later one follows it (with Dizzying Heights both changes must go the same way); forced (Flairabou: you must eat) = the choice cannot be skipped (Cancel undoes the whole action)
 	if (character.heightDir) return character.heightDir;
 	var must = forced || cherryCtx;
-	var ans = (await uiPrompt("Which way does your height change? Type taller or shorter. Every later height change (Flairabou, Dizzying Heights) will go the same way." + (cherryCtx ? forcedNote("taller") : forced ? "\n\nThe change cannot be avoided, so if you cancel or type something invalid, \"taller\" is chosen for you." : "")) || "").trim().toLowerCase();
-	if (must && ans != "taller" && ans != "shorter") ans = "taller";
-	if (ans != "taller" && ans != "shorter") return null;
+	var hAns = await uiForm("Which way does your height change? Every later height change (Flairabou, Dizzying Heights) will go the same way." + (cherryCtx ? "\n\nCherry's luck forces this Curse on you, so a choice has to be made." : forced ? "\n\nThe change cannot be avoided, so a choice has to be made." : ""), [{key: "dir", kind: "radio", options: [{value: "taller", label: "Taller"}, {value: "shorter", label: "Shorter"}], def: must ? "taller" : undefined}]);
+	if (!hAns) return null;
+	var ans = hAns.dir;
 	character.heightDir = ans;
 	return ans;
 }
@@ -999,7 +1247,7 @@ async function applyForagedEffect(name) { // a day's worth of foraged food was e
 	if (name == "Cloudpools" && hasCurse("Shrunken Assets")) return; // nullified by Shrunken Assets
 	var text = (typeof fx == "object") ? fx.text : fx;
 	if ((name == "Lethe Taps" || name == "Fountain of Youth") && compOn("Saeko") && has("items", "Smartphone")) text = "-0.05 IQ";
-	if (name == "Flairabou") text = text.replace("height change", await chooseHeightDir(true)); // cancelled or invalid: taller (the prompt says so)
+	if (name == "Flairabou") text = text.replace("height change", await chooseHeightDir(true));
 	if (typeof fx == "object") {
 		character.corruption += fx.corr;
 		if (wonders["Empty-handed Broker"][1] > 0 && character.corruption < 0) character.corruption = 0; // after the Broker corruption can never go negative
@@ -1007,6 +1255,7 @@ async function applyForagedEffect(name) { // a day's worth of foraged food was e
 	character.effects[name + ": " + text] = (character.effects[name + ": " + text] || 0) + 1;
 }
 function spectreDue() { return !character.purity && !isImmune("Spectre of the End") && character.spectreStartDay !== null && character.days - character.spectreStartDay >= 900; }
+function dycxSafe() { return compOn("Saeko") && has("items", "Smartphone"); } // Saeko + Smartphone filter the River Dycx: its water is then ordinary safe water (no jinxed flame)
 function need() { return hasCurse("Minish-ish") ? 0.25 : 1; } // Minish-ish: you need 1/4 the food and water
 async function useFrom(key, stock, setStock, weightPer, finish) { // eat or drink one day's need from a source; a unit is used up (and weighs nothing) once its last bit is gone
 	if (stock <= 0) return false;
@@ -1026,12 +1275,13 @@ async function eatDay(purchasedFirst) { // normal order: foraged (spoils), bough
 	for (var k = 0; k < 3; k++) {
 		var t = order[k];
 		if (t == 2 && await useFrom("food2", f[2], function(v) { f[2] = v; }, FORAGED_FOOD_WEIGHT, async function() { await applyForagedEffect(character.foragedQueue.shift()); })) return;
+		if (t == 2 && !purchasedFirst && await autoForageDay("food")) return; // carried foraged food spoils, so it goes first; then any automatic foraging spot, before bought food and Energy Rations
 		if (t == 1 && await useFrom("food1", f[1], function(v) { f[1] = v; }, 0.5)) return;
 		if (t == 0 && await useFrom("food0", f[0], function(v) { f[0] = v; }, 0.4)) return;
 	};
 	var ff = forageSpot("food", f[0] - need() <= HUNGER_DEATH + 1e-9); // free food here is eaten on the spot instead of a deficit; so is any food here you can pay for that would save you from starving
 	if (ff) {
-		note((forageIsFree("food", ff) ? "Free foraging: " : "Emergency foraging (you would have starved): ") + "a day of " + ff + ", eaten on the spot.");
+		note((forageIsFree("food", ff) ? "Free" : "Emergency") + " food foraging: " + ff);
 		if (await forageUse("food", ff)) return;
 	};
 	if (!ff && f[0] - need() <= HUNGER_DEATH + 1e-9 && emergencyVend("food")) return;
@@ -1053,33 +1303,65 @@ function forageTime(n) { // the days a visit to this spot would take right now (
 	return 0;
 }
 function forageIsFree(kind, n) { // costs nothing right now: no ammo and no side effect with your current inventory (Encyclopedia; Saeko with a Smartphone filters the Dycx)
-	if (n == "The River Dycx") return compOn("Saeko") && has("items", "Smartphone");
+	if (n == "The River Dycx") return dycxSafe();
 	if (n == "Underground Rivers" || n == "Oasis") return true; // safe water: free whenever it takes no time
 	var enc = character.hasEncyclopedia ? 1 : 0, d = kind == "water" ? taggedWater[n] : foragedFood[n];
 	return d.fx[enc] === null && !d.ammo;
 }
 function forageAffordable(kind, n) { return kind == "water" || character.ammo >= ammoCost(foragedFood[n].ammo || 0) || !foragedFood[n].ammo; }
-function forageSpot(kind, emergency) { // the spot to use instead of a deficit: any free one; in an emergency (this day would be fatal) any spot you can afford: Freshwater Pockets first, the Dycx last, the cheapest food first
-	var spots = forageSpots(kind).filter(function(n) { return forageIsFree(kind, n); });
-	if (!spots.length && emergency) {
-		spots = forageSpots(kind).filter(function(n) { return forageAffordable(kind, n); });
-		spots.sort(function(x, y) {
-			if (kind == "water") return (x == "The River Dycx") - (y == "The River Dycx") || (y == "Freshwater Pockets") - (x == "Freshwater Pockets");
-			return (foragedFood[x].ammo || 0) - (foragedFood[y].ammo || 0);
-		});
-	};
+function forageSpot(kind, emergency) { // the spot to use instead of a deficit: any free one; in an emergency (this day would be fatal) any spot you can afford: free ones first, the Dycx last, the cheapest food first
+	var spots = forageSpots(kind).filter(function(n) { return forageIsFree(kind, n) && forageOverride(n) !== false; }); // a free spot you switched off is left alone, except in an emergency
+	if (!spots.length && emergency) spots = forageOrder(kind, forageSpots(kind).filter(function(n) { return forageAffordable(kind, n); }));
 	return spots[0] || null;
+}
+function forageOrder(kind, spots) { // water: free spots first, then the rest with the Dycx (jinxed flame) last; food: the cheapest in ammo first
+	return spots.sort(function(x, y) {
+		if (kind == "water") return (forageIsFree(kind, y) - forageIsFree(kind, x)) || ((x == "The River Dycx") - (y == "The River Dycx"));
+		return (foragedFood[x].ammo || 0) - (foragedFood[y].ammo || 0);
+	});
+}
+// ---- Smart auto-foraging: a spot you can forage at no time is used for each day's food or water before anything you carry, as long as it is on.
+// On = automatic (exactly while it is free: no time, no ammo, no side effect with today's bonuses) unless you switched it with a right click (stored per layer in character.autoForage).
+function forageToggleable(n) { return !!(foragedFood[n] || taggedWater[n] || n == "The River Dycx" || n == "Underground Rivers" || n == "Oasis"); }
+function forageKind(n) { return foragedFood[n] ? "food" : "water"; }
+function forageOverride(n) { var o = character.autoForage; return o ? o[currentLayer + ":" + n] : undefined; }
+function forageAutoDefault(kind, n) { return forageIsFree(kind, n) && forageTime(n) === 0; } // automatic: on exactly while the spot is free and takes no time
+function forageAutoOn(kind, n) { var o = forageOverride(n); return o === undefined ? forageAutoDefault(kind, n) : o; }
+function autoForageSpots(kind) { return forageOrder(kind, forageSpots(kind).filter(function(n) { return forageAutoOn(kind, n); })); } // spots on right now that take no time
+function autoForageNames() { return autoForageSpots("food").concat(autoForageSpots("water")); }
+async function autoForageDay(kind) { // one day's food or water from an automatic spot; true if it was covered. Free spots first; a switched-on costly spot is charged once per full day of need (Minish-ish: a quarter at a time)
+	var spots = autoForageSpots(kind).sort(function(x, y) { return forageIsFree(kind, y) - forageIsFree(kind, x); });
+	for (var i = 0; i < spots.length; i++) {
+		var n = spots[i];
+		if (forageIsFree(kind, n)) { if (await forageUse(kind, n)) return true; continue; }
+		var key = "af:" + n, prev = character.frac[key] || 0, now = prev + need();
+		if (now < 1 - 1e-9) { character.frac[key] = now; return true; }
+		if (!forageAffordable(kind, n)) continue;
+		if (await forageUse(kind, n)) { character.frac[key] = 0; return true; }
+	};
+	return false;
+}
+function toggleAutoForage(n) { // right click on a foraging hotspot; returns the log line
+	var kind = forageKind(n), want = !forageAutoOn(kind, n);
+	character.autoForage = character.autoForage || {};
+	if (want === forageAutoDefault(kind, n)) delete character.autoForage[currentLayer + ":" + n]; // back to automatic
+	else character.autoForage[currentLayer + ":" + n] = want;
+	return "Auto-foraging " + (want ? "enabled" : "disabled") + ": " + n;
+}
+function forageAutoHint(n) { // tooltip line for a foraging hotspot
+	if (!forageToggleable(n) || character.dead || character.ended) return null;
+	return forageAutoOn(forageKind(n), n) ? "Auto-foraging: on (right-click to turn off)" : "Auto-foraging: off (right-click to turn on)";
 }
 function emergencyVend(kind) { // layer 7: the vending machines take no time but cost dubloons; used (and eaten or drunk on the spot) only to avoid dying of thirst or hunger
 	var item = kind == "water" ? "Water (vending)" : "Food Rations (vending)", cost = items[item][0];
 	if (currentLayer != 7 || barterBlocked() || character.doubloons < cost) return false;
 	character.doubloons -= cost;
-	note("Emergency purchase (you would have " + (kind == "water" ? "died of thirst" : "starved") + "): one " + (kind == "water" ? "day of water" : "day of food") + " from a vending machine for " + cost + " dubloons, used on the spot.");
+	note("Emergency vending " + kind + ": 1 day, " + cost + " dubloons");
 	return true;
 }
 async function forageUse(kind, n) { // consume one day's worth on the spot (nothing is carried: no flask, no weight)
 	if (kind == "water") {
-		if (n == "The River Dycx") { if (!(compOn("Saeko") && has("items", "Smartphone"))) character.jinxedFlame += 1; }
+		if (n == "The River Dycx") { if (!dycxSafe()) character.jinxedFlame += 1; }
 		else if (n == "Underground Rivers") character.foundUndergroundRivers = true; // safe water, no effect
 		else if (n == "Oasis") character.foundOasis = true;
 		else await applyForagedEffect(n);
@@ -1094,16 +1376,17 @@ async function drinkDay() {
 	if (character.purity) return; // the purity gene: no water needed
 	if (w[2] > 0 && character.jinxedFlame > 0 && await useFrom("water2", w[2], function(v) { w[2] = v; }, 0.9, function() { character.jinxedFlame = Math.max(0, character.jinxedFlame - 1); })) return; // Ward Water
 	if (hasRelic("Aquarius Ex Nihilo")) return; // an endless stream of fresh water: you never need to carry water again
+	if (await autoForageDay("water")) return; // then automatic foraging, before any other water you carry: with a free source no flask is ever used
 	if (await useFrom("water1", w[1], function(v) { w[1] = v; }, 0.8)) return;
 	if (await useFrom("water0", w[0], function(v) { w[0] = v; }, 0.8)) return;
 	var tag = nextTaggedWater();
 	if (tag && await useFrom("water:" + tag, character.tagged[tag], function(v) { character.tagged[tag] = v; }, 0.8, async function() { await applyForagedEffect(tag); })) return; // water with an effect, after safe water
 	if (await useFrom("water3", w[3], function(v) { w[3] = v; }, 0.8, function() { // River Dycx water is drunk last; each day's worth adds a jinxed flame counter (filtered with Saeko + Smartphone)
-		if (!(compOn("Saeko") && has("items", "Smartphone"))) character.jinxedFlame += 1;
+		character.jinxedFlame += 1; // water collected with Saeko + Smartphone was filtered at collection and is stored as safe water, so this is always unfiltered
 	})) return;
 	var fw = forageSpot("water", w[0] - need() <= THIRST_DEATH + 1e-9); // free water here is drunk on the spot instead of a deficit; so is any water here that would save you from dying of thirst
 	if (fw) {
-		note((forageIsFree("water", fw) ? "Free foraging: " : "Emergency foraging (you would have died of thirst): ") + "a day of " + fw + " water, drunk on the spot.");
+		note((forageIsFree("water", fw) ? "Free" : "Emergency") + " water foraging: " + fw);
 		await forageUse("water", fw);
 		return;
 	};
@@ -1111,43 +1394,44 @@ async function drinkDay() {
 	w[0] -= need(); // out of water: deficit
 }
 function taggedTotal() { var n = 0; for (var k in character.tagged) n += Math.max(0, character.tagged[k]); return n; }
-function nextTaggedWater() { // Freshwater Pockets (beneficial) first, then the others in the order you collected them
-	if (character.tagged["Freshwater Pockets"] > 0) return "Freshwater Pockets";
+function nextTaggedWater() { // water with an effect, in the order you collected it
 	return Object.keys(character.tagged).find(function(k) { return character.tagged[k] > 0; }) || null;
 }
 function flaskEmpty() { return flaskCapacity() - character.water[1] - character.water[3] - taggedTotal(); } // empty flasks (and Everhevea room)
 function flaskRoom() { // how many more flasks of water you could fill and carry
-	return Math.min(flaskEmpty(), Math.floor((carryLimit() - totalWeight() + 1e-9)/0.8));
+	return Math.min(flaskEmpty(), Math.floor((hardLimit() - totalWeight() + 1e-9)/0.8));
 }
 async function fillFlasksFrom(source) { // arriving at any water source: a water deficit is cleared (you drink), then your empty flasks (and Everhevea) can be filled
-	if (character.water[0] < 0) { note("You drink your fill at the " + source + ": your water deficit (" + character.water[0] + " days) is cleared."); character.water[0] = 0; character.frac.water0 = 0; }
+	if (character.water[0] < 0) { note("Drank at " + source + ": water deficit " + character.water[0] + " cleared"); character.water[0] = 0; character.frac.water0 = 0; }
 	var empty = flaskRoom();
 	if (empty <= 0) return;
-	if (!await uiConfirm("Fill your " + empty + " empty flask(s) with " + source + " water?")) return;
-	if (source == "River Dycx") character.water[3] += empty;
+	if (!await uiConfirm("Fill your " + empty + " empty flask(s) with " + source + " water?", "Yes", "No")) return;
+	if (source == "River Dycx") { if (dycxSafe()) character.water[1] += empty; else character.water[3] += empty; } // safe or not is decided now, when you collect it, and never changes later
 	else if (taggedWater[source]) character.tagged[source] = (character.tagged[source] || 0) + empty;
 	else character.water[1] += empty; // safe water (Underground Rivers, Oasis)
 	character.itemWeight += 0.8*empty;
 }
-function note(msg) { get('log').value += "* " + msg + "\n"; }
+var quietItemLog = false; // the Commerce Balloon logs its whole order as one line, so the single purchases inside it write none
+var postLogNotes = []; // notes that belong after the action line of the log
+function note(msg) { get('log').value += "*" + msg + "\n"; }
 function carriedRationDays() { return character.food[0] + 2*character.food[1]; } // foraged food doesn't count; an Energy Ration covers 2 days
 function isImmune(threat) { return character.immune.indexOf(threat) >= 0; }
 async function huskNow(threat) { // Hardened Husk: true if you are immune to this threat; the first time a threat would strike you may spend one of your 3 immunities on it for good
 	if (isImmune(threat)) return true;
 	if (character.dead || !character.raison || character.raison.kind != "husk" || character.raisonLeft <= 0) return false;
-	if (!await uiConfirm("A " + threat.replace(/^The /, "") + " is about to strike. Spend one of your Hardened Husk immunities (" + character.raisonLeft + " left) so that it can never touch you again?\nOK = immune for good. Cancel = face it this time (you will be asked again).")) return false;
+	if (!await uiConfirm("A " + threat.replace(/^The /, "") + " is about to strike. Spend one of your Hardened Husk immunities (" + character.raisonLeft + " left) so that it can never touch you again? If you face it this time, you will be asked again.", "Immune for good", "Face it")) return false;
 	character.immune.push(threat); character.raisonLeft -= 1;
-	note("Hardened Husk: you are now immune to " + threat + " (" + character.raisonLeft + " immunities left).");
+	note("Hardened Husk: immune to " + threat + " (" + character.raisonLeft + " left)");
 	return true;
 }
-function shrugOff(threat) { note("Your Hardened Husk shrugs off the " + threat + "."); }
+function shrugOff(threat) { note("Husk: " + threat + " ignored"); }
 async function threatsAfterDay(lightToday) {
 	var c = character.counters;
 	if (currentLayer == 2) { // Baying Gourmet: every 4 consecutive days carrying 10+ days of rations
 		c.gourmet = (carriedRationDays() >= 10) ? (c.gourmet || 0) + 1 : 0;
 		if (c.gourmet >= 4) {
 			c.gourmet = 0;
-			if (groupSize() >= 5) note("A Baying Gourmet sees your group of " + groupSize() + " and leaves.");
+			if (groupSize() >= 5) note("Baying Gourmet leaves (group " + groupSize() + ")");
 			else if (await huskNow("Baying Gourmet")) shrugOff("Baying Gourmet");
 			else await resolveGourmet();
 		};
@@ -1157,7 +1441,7 @@ async function threatsAfterDay(lightToday) {
 			c.slack = 0;
 			if (await huskNow("Slackslime")) shrugOff("Slackslime");
 			else {
-				note("Slackslime paralyzes you; you are force-fed (purchased food first).");
+				note("Slackslime: paralyzed, force-fed");
 				await timeHandler(hasCurse("Gooey") ? 1 : 2, false, {noCounters: true, purchasedFirst: true});
 			};
 		};
@@ -1172,7 +1456,7 @@ async function threatsAfterDay(lightToday) {
 			c.mayfly = 0;
 			if (await huskNow("Mayfly Scuttler")) shrugOff("Mayfly Scuttler");
 			else {
-				note("Mayfly swarm: a day with no progress.");
+				note("Mayfly swarm: 1 day no progress");
 				await timeHandler(1, false, {noCounters: true});
 			};
 		};
@@ -1184,10 +1468,10 @@ async function threatsAfterDay(lightToday) {
 		c.robot = (c.robot || 0) + 1; // Security Robot: one every 6 consecutive days in the layer
 		if (c.robot >= 6) {
 			c.robot = 0; // the next visit comes 6 days after release
-			if (character.doubloons >= 500) note("A Security Robot sees you carry 500 or more dubloons and leaves you alone.");
+			if (character.doubloons >= 500) note("Security Robot leaves (500+ dubloons)");
 			else if (await huskNow("Security Robot")) shrugOff("Security Robot");
 			else {
-				note("A Security Robot detains you for a whole day (you still owe tax, food and water).");
+				note("Security Robot: detained 1 day");
 				character.detentions += 1;
 				await timeHandler(1, false, {noCounters: true});
 				await chargeTax();
@@ -1218,45 +1502,45 @@ async function elderDay() { // The Elder: counters are cumulative
 	if ((d == 25 || d == 51) && await huskNow("The Elder")) { shrugOff("The Elder"); return; }
 	if (d == 25) { // after 25 days it starts toying with you (the first limb is an arm, ruled; only intact organic limbs can be taken)
 		var il = intactLimbs();
-		if (il.arm) await elderRipsLimb("arm"); else if (il.leg) await elderRipsLimb("leg"); else note("The Elder finds no intact limb left to take.");
+		if (il.arm) await elderRipsLimb("arm"); else if (il.leg) await elderRipsLimb("leg"); else note("Elder: no limb left")
 	};
 	if (!character.dead && d == 51) // after more than 50 days it fights in earnest: it is dealt with (a plan) or you are forced into the habitation, once
 		await forcedHabitation("After " + d + " days in layer 9 The Elder fights in earnest and forces you into A New Appendage.");
 }
 async function elderRipsLimb(kind) { // you need an immediate medkit or you bleed out; the Lifespanner heals the limb at once; the Phoenix Obol undoes the damage that killed you
-	if (hasRelic("Lifespanner")) { note("The Elder rips off your " + kind + ", but the Lifespanner heals it at once."); return; }
+	if (hasRelic("Lifespanner")) { note("Elder takes " + kind + ", Lifespanner heals"); return; }
 	var medkit = medkitIndex() >= 0, obol = hasRelic("Phoenix Obol") && !character.obolUsed;
-	if (medkit && obol && !await uiConfirm("The Elder rips off your " + kind + "! Use a Medkit (you survive but stay without the " + kind + ") or let the Phoenix Obol revive you (it undoes the damage, but it is used up)?\nOK = Medkit, Cancel = Phoenix Obol")) medkit = false;
+	if (medkit && obol) {
+		var elderAns = await uiForm("The Elder rips off your " + kind + "!", [{key: "how", kind: "radio", options: [
+			{value: "medkit", label: "Use a Medkit", desc: "You survive but stay without the " + kind + "."},
+			{value: "obol", label: "Let the Phoenix Obol revive you", desc: "It undoes the damage, but it is used up."}
+		], def: "medkit"}], null, true);
+		if (elderAns.how == "obol") medkit = false;
+	};
 	if (!medkit) {
 		await die("The Elder rips off your " + kind + " and you bleed out: you had no medkit.");
-		if (!character.dead) note("The Phoenix Obol undoes the damage that killed you: your " + kind + " is back."); // revived: the limb is not lost
+		if (!character.dead) note("Elder kills, Phoenix Obol revives: " + kind + " back"); // revived: the limb is not lost
 		return;
 	};
 	consumeMedkit();
 	character.limbsLost[kind] += 1;
-	note("The Elder rips off your " + kind + "; you use a Medkit at once to survive.");
+	note("Elder takes " + kind + ", Medkit used");
 	await resolveGrasp();
 }
 async function resolveAberration() { // the aberration stops all progress for that day; every third one is real
 	if (await huskNow("Demential Aberrations")) { shrugOff("Demential Aberrations"); return; }
 	character.aberrations += 1;
 	var real = character.aberrations % 3 == 0;
-	note(real ? "A REAL Demential Aberration attacks, and progress stops for a day." : "A Demential Aberration appears (an illusion): progress stops for a day.");
+	note((real ? "Real" : "Illusory") + " Demential Aberration: 1 day no progress");
 	if (real) { // ruled: companions fight each other's aberrations and keep you safe; alone you suffer a mild limp (standard expiry)
-		if (character.companions.length > 0) note("Your companions fight off the aberration.");
+		if (character.companions.length > 0) note("Companions fight it off");
 		else await addStatus("mild limp", 1, 1, 4, 1);
 	};
 	await timeHandler(1, false, {noCounters: true});
 	if (!character.dead) inanisDay(); // that day was spent in this layer too
 }
-async function parseCurseTarget(text) { // "curse -> companion"
-	if (text === null) return null;
-	var sep = text.indexOf("->");
-	var curseName = sep < 0 ? "" : text.substring(0, sep).trim();
-	var companion = sep < 0 ? "" : text.substring(sep + 2).trim();
-	if (!curseName || !companion) { await uiAlert("Use the format: name -> companion"); return null; }
-	return [curseName, companion];
-}
+const OVERWEIGHT_MARGIN = 20; // you may carry up to this many kg over your capacity (shown in red); beyond it nothing more can be picked up
+function hardLimit() { return carryLimit() + OVERWEIGHT_MARGIN; }
 function carryLimit() { // everything you and your companions carry counts (food and water too)
 	if (character.hoardActive) return Infinity;
 	var own = 20; // your own capacity (the 20 kg base)
@@ -1268,8 +1552,8 @@ function carryLimit() { // everything you and your companions carry counts (food
 	return (character.weightLimit - 20 + own) / (character.wings ? 2 : 1); // flying with the wings halves your capacity
 }
 async function fits(extra) { // can you carry `extra` more kg?
-	if (extra > 0 && totalWeight() + extra > carryLimit() + 1e-9) {
-		await uiAlert("That is too heavy to carry (" + (totalWeight() + extra).toFixed(1) + " of " + carryLimit() + " kg).");
+	if (extra > 0 && totalWeight() + extra > hardLimit() + 1e-9) {
+		await uiAlert("That is too heavy to carry (" + (totalWeight() + extra).toFixed(1) + " kg; the limit is " + hardLimit() + " kg, " + carryLimit() + " kg capacity plus " + OVERWEIGHT_MARGIN + " kg).");
 		return false;
 	};
 	return true;
@@ -1284,7 +1568,7 @@ function recomputeFlags() { // after items leave (Tunnel) or return
 	character.hasLight = character.hasStrongLight || hasRelic("Moonwatcher");
 }
 function teleportToSurface() { // One-sided Tunnel: shop items (not food, water, flasks, worn braces, vault items), dubloons and ammo go to the surface
-	if (character.companions.length > 0) { note("Your companions wait outside the tunnel with your belongings, so nothing is teleported."); return; }
+	if (character.companions.length > 0) { note("Tunnel: companions keep belongings, no teleport"); return; }
 	var moved = [], kept = [], weight = 0;
 	character.items.forEach(function(n) {
 		if (n == "Warding Brace" || n == "Inn Room" || n == "Relic Workshop" || n.indexOf("(vault)") >= 0 || n.indexOf("Flask") == 0) kept.push(n);
@@ -1298,7 +1582,7 @@ function teleportToSurface() { // One-sided Tunnel: shop items (not food, water,
 	character.doubloons = 0;
 	character.ammo = 0;
 	recomputeFlags();
-	note("The Tunnel teleports your shop items, dubloons and ammo to " + character.surfaceStash.where + ". Travel up to retrieve them.");
+	note("Tunnel teleports items/dubloons/ammo to " + character.surfaceStash.where);
 }
 function arriveAtSurface() { // retrieval and Purity Tree wood
 	var st = character.surfaceStash;
@@ -1309,14 +1593,14 @@ function arriveAtSurface() { // retrieval and Purity Tree wood
 		character.itemWeight += st.weight;
 		character.surfaceStash = null;
 		recomputeFlags();
-		note("You retrieve your teleported belongings from " + st.where + ".");
+		note("Retrieved teleported belongings: " + st.where);
 	};
 	var wd = character.purityWood;
 	if (wd.workshop + wd.sale > 0) { // ASSUMPTION: no need to have bought the Relic Workshop service first
 		character.corruption += 25*wd.workshop;
 		gainDoubloons(35*wd.sale);
 		character.itemWeight -= 1.5*(wd.workshop + wd.sale);
-		note("Purity Wood: " + wd.workshop + " section(s) made into gear (+" + 25*wd.workshop + " corruption), " + wd.sale + " sold (+" + 35*wd.sale + " dubloons).");
+		note("Purity Wood: " + wd.workshop + " gear (+" + 25*wd.workshop + " corruption), " + wd.sale + " sold (+" + 35*wd.sale + " dubloons)");
 		wd.workshop = 0; wd.sale = 0;
 	};
 }
@@ -1325,7 +1609,7 @@ function endingSummary(title, line, followers) { // the final summary shown when
 	var comp = followers ? followers : character.companions;
 	return title + (line ? ": " + line : "") + "\nDay " + character.days + ", corruption " + character.corruption + ", " + character.doubloons + " dubloons" + (character.money ? ", $" + character.money : "") +
 		"\nRelics (" + character.relics.length + "): " + (character.relics.join(", ") || "none") +
-		"\nCurses (" + character.curses.length + "): " + (character.curses.map(function(n, i, ar) { return n == "Dizzying Heights" ? (ar.indexOf(n) == i ? "Dizzying Heights (level " + ar.filter(function(x) { return x == n; }).length + ")" : null) : n; }).filter(Boolean).join(", ") || "none") +
+		"\nCurses (" + curseCopies() + "): " + (character.curses.map(curseLabel).join(", ") || "none") +
 		(character.raison ? "\nRaison d'Etre: " + RAISON_NAMES[character.raison.kind] + (character.raison.kind == "husk" ? (character.immune.length ? " (immune to " + character.immune.join(", ") + ")" : "") : (character.raison.detail ? " (" + character.raison.detail + ")" : "")) : "") +
 		"\nCompanions: " + (comp.join(", ") || "none");
 }
@@ -1357,17 +1641,17 @@ function vaultDoorOpen() { return character.days - character.vaultStart >= 60; }
 function vaultErrandPossible() { // the companion prompt appears on the first click only (state none); later clicks are collect/return clicks
 	return character.vaultState == "none" && vaultCandidates().length > 0 && !character.pendingArrival && !character.dead && !character.ended;
 }
-async function askVaultCompanion() { // left click on the vault: typed choice of the companion to leave at the door (Cancel or anything unknown: nobody)
+async function askVaultCompanion() { // left click on the vault: choose the companion to leave at the door ("Nobody" = nobody; Cancel undoes the click)
 	var opts = vaultCandidates();
 	var opens = "60 days after you first touch it";
-	var ans = (await uiPrompt("Leave a companion at the Mirage Vault? They wait at the door (their capacity and bonuses are lost to you) and collect everything when it opens (" + opens + "). Come back to the vault at any later time to receive the haul and take them back. Type one of: " + opts.join(", ") + " (Cancel to leave nobody).") || "").trim().toLowerCase();
-	return opts.filter(function(o) { return o.toLowerCase() == ans; })[0] || null;
+	var vAns = await uiForm("Leave a companion at the Mirage Vault? They wait at the door (their capacity and bonuses are lost to you) and collect everything when it opens (" + opens + "). Come back to the vault at any later time to receive the haul and take them back.", [{key: "who", kind: "radio", options: opts.slice(), none: "Nobody"}]);
+	return (vAns && vAns.who) || null;
 }
 function leaveCompanionAtVault(who) { // you give up one companion (and their bonuses) until you come back for the haul
 	removeCompanion(who);
 	character.vaultState = "waiting";
 	character.vaultAway = {name: who};
-	note("Mirage Vault: " + who + " stays at the door. Come back to the vault once it has opened (day " + (character.vaultStart + 60) + " or later) to collect the haul and take them back.");
+	note("Mirage Vault: " + who + " left at door (collect from day " + (character.vaultStart + 60) + ")");
 	updateInfo();
 }
 function vaultCollectReason() { // why the vault's contents cannot be collected now (null if they can, by you or by a companion you leave); decides the red hover
@@ -1417,7 +1701,7 @@ async function offerFlight(portalName, base) { // Daedalus Mechanism wings: goin
 	var plan = await flightCheck();
 	if (!plan) return null;
 	var cost = up ? Math.ceil(base/2) : base; // going down, the wings only spare you the Hexflame Fields
-	if (!await uiConfirm("Fly with the Daedalus Mechanism? The trip takes " + (up ? cost + " days instead of " + base : base + " days (not shorter going down)") + (currentLayer >= 6 ? ", avoids the Hexflame Fields" : "") + ", and your carrying capacity is halved." + (plan.leaving.length ? " Your companions (" + plan.leaving.join(", ") + ") are left behind for good, since they have no copy of their own." : ""))) return null;
+	if (!await uiConfirm("Fly with the Daedalus Mechanism? The trip takes " + (up ? cost + " days instead of " + base : base + " days (not shorter going down)") + (currentLayer >= 6 ? ", avoids the Hexflame Fields" : "") + ", and your carrying capacity is halved." + (plan.leaving.length ? " Your companions (" + plan.leaving.join(", ") + ") are left behind for good, since they have no copy of their own." : ""), "Yes", "No")) return null;
 	return {leaving : plan.leaving, base : cost};
 }
 async function useDaedalus() { // wings for a stay in layer 6: Relics, foraging and Wonders there also avoid the Hexflame Fields
@@ -1429,7 +1713,7 @@ async function useDaedalus() { // wings for a stay in layer 6: Relics, foraging 
 	if (!await uiConfirm("Use the Daedalus wings while you stay in layer 6? You gain no jinxed flame until you leave, your carrying capacity is halved." + (plan.leaving.length ? " Your companions (" + plan.leaving.join(", ") + ") are left behind for good, since they have no copy of their own." : ""))) return null;
 	plan.leaving.forEach(removeCompanion);
 	character.wings = true;
-	return "Relic: Daedalus Mechanism wings used in layer 6" + (plan.leaving.length ? " (left behind: " + plan.leaving.join(", ") + ")" : "");
+	return "Relic: Daedalus Mechanism wings used in layer 6" + (plan.leaving.length ? " (leaving " + plan.leaving.join(", ") + " behind)" : "");
 }
 function groupSize() { return 1 + character.companions.length; }
 function hasRelic(n) { return has("relics", n) || has("devoured", n); }
@@ -1450,11 +1734,10 @@ async function resolveGrasp() { // lost both arms and legs: you choose which soc
 	var both = has("relics", "Glory's Grasp") && lostLimbs("arm") > 0 && lostLimbs("leg") > 0;
 	if (!both) { character.graspLimb = null; return; }
 	if (character.graspLimb) return;
-	var ans = "";
-	for (var tries = 0; tries < 3 && ans != "arm" && ans != "leg"; tries++) ans = (await uiPrompt("Glory's Grasp can fill only one empty socket, and you have lost both arms and legs. Type arm or leg:") || "").trim().toLowerCase();
-	if (ans != "arm" && ans != "leg") ans = "arm";
+	var gAns = await uiForm("Glory's Grasp can fill only one empty socket, and you have lost both arms and legs. Which one does it fill?", [{key: "limb", kind: "radio", options: [{value: "arm", label: "An arm"}, {value: "leg", label: "A leg"}], def: "arm"}], null, true);
+	var ans = gAns ? gAns.limb : "arm";
 	character.graspLimb = ans;
-	note("Glory's Grasp is installed in your empty " + ans + " socket.");
+	note("Glory's Grasp installed: " + ans);
 }
 function limbPenalty(kind) { // Glory's Grasp (installed in an empty socket) cancels the penalty of one lost limb: an arm if you lost one, else a leg (placeholder reading)
 	var n = lostLimbs(kind);
@@ -1476,10 +1759,10 @@ function waterproofLight() { return has("items", "Flashlight") || has("items", "
 function canBreatheUnderwater() { return has("items", "Scuba Gear") || hasCurse("Seafolk") || hasRelic("Pneuma Wisp") || character.creativeBreathing; }
 async function breathingCheck() { // the end of the "9down" journey: layer 9 needs a way to breathe underwater (a creative plan is an Override)
 	if (canBreatheUnderwater()) return true;
-	var plan = await uiPrompt("You reach the deep pool at the bottom of layer 8, but you are not equipped to go on from here. Type a specific creative plan to continue (Override). Cancel or blank = you stay in layer 8 for now.");
+	var plan = await uiPrompt("You reach the deep pool at the bottom of layer 8, but you are not equipped to go on from here. Type a specific creative plan to continue (Override). OK with nothing typed = you stay in layer 8 for now.");
 	if (plan === null || !plan.trim()) return false;
 	character.creativeBreathing = true;
-	note("Override plan to continue past the deep pool: " + plan.trim());
+	note("Override plan (deep pool): " + plan.trim());
 	return true;
 }
 function lightTorch(tripDays) { // a Torch is light + heat and lasts max(1 day, one trip); it covers any number of 0-day trips
@@ -1488,6 +1771,7 @@ function lightTorch(tripDays) { // a Torch is light + heat and lasts max(1 day, 
 	character.items.splice(k, 1);
 	character.itemWeight -= items["Torch"][1];
 	character.torchEnd = character.days + Math.max(1, tripDays);
+	note("Torch lit (until day " + character.torchEnd + ")");
 	return true;
 }
 async function planLight(strong, tripDays) { // strong = true excludes Moonwatcher (e.g. Absolute Oracle). Returns null or {torch}
@@ -1497,34 +1781,34 @@ async function planLight(strong, tripDays) { // strong = true excludes Moonwatch
 		return null;
 	};
 	if (character.hasStrongLight || (!strong && character.hasLight) || torchCovers(tripDays)) return {torch: false};
-	if (has("items", "Torch") && await uiConfirm("This needs a light source. Light a Torch for this trip?")) return {torch: true};
+	if (has("items", "Torch") && await uiConfirm("This needs a light source. Light a Torch for this trip?", "Yes", "No")) return {torch: true};
 	await uiAlert("This needs a light source!");
 	return null;
 }
+async function pickHeatRelic(what) { // Override: asks which Relic serves as the heat source; "(none)" = none. The choice is logged. Returns the Relic name or null
+	if (!character.relics.length) return null;
+	var heatAns = await uiForm("No portable heat source. Override: which of your Relics do you treat as a heat source " + what + "? (Choose \"(none)\" for no Relic.)", [{key: "relic", kind: "select", label: "Relic", options: relicOptions(character.relics), none: "(none)"}]);
+	if (!heatAns || !heatAns.relic) return null;
+	note("Override: " + heatAns.relic + " used as a heat source " + what);
+	return heatAns.relic;
+}
 async function planHeat(tripDays) { // Sunbeam, a burning/new Torch, or an Override with a Relic (Solace Lace only counts in layer 4)
 	if (hasRelic("Sunbeam") || torchCovers(tripDays)) return {torch: false};
-	if (currentLayer != 9 && has("items", "Torch") && await uiConfirm("This needs a heat source. Light a Torch for this trip?")) return {torch: true};
-	if (character.relics.length > 0 && await uiConfirm("No heat source. Override: treat one of your Relics as a heat source?")) return {torch: false};
+	if (currentLayer != 9 && has("items", "Torch") && await uiConfirm("This needs a heat source. Light a Torch for this trip?", "Yes", "No")) return {torch: true};
+	if (character.relics.length > 0 && await pickHeatRelic("for this journey")) return {torch: false};
 	await uiAlert("This needs a heat source!");
 	return null;
 }
-async function askChoice(title, labels, mandatory) { // returns the chosen index, or -1 for "none" (only if not mandatory)
+async function askChoice(title, labels, mandatory) { // radio dialog; returns the chosen index, or -1 for "none" (only if not mandatory, via the "None of these" option). A mandatory choice has nothing preselected
 	if (!labels.length) return -1;
-	var txt = title + "\n";
-	labels.forEach(function(l, i) { txt += (i + 1) + ": " + l + "\n"; });
-	if (!mandatory) txt += "0: none of these (suffer the consequence)\n";
-	for (var tries = 0; tries < 5; tries++) {
-		var a = await uiPrompt(txt, "1");
-		if (a === null && !mandatory) return -1;
-		var n = parseInt(a, 10);
-		if (n >= 1 && n <= labels.length) return n - 1;
-		if (!mandatory && n === 0) return -1;
-	};
-	return mandatory ? labels.length - 1 : -1;
+	var opts = labels.map(function(l, i) { return {value: i, label: l}; });
+	var ans = await uiForm(title, [{key: "pick", kind: "radio", options: opts, def: 0, none: mandatory ? undefined : "None of these (suffer the consequence)"}]);
+	if (!ans || ans.pick === "" || ans.pick === null) return mandatory ? labels.length - 1 : -1;
+	return ans.pick;
 }
 async function addStatus(name, add, mult, left, cures, dbl) { // Cherry shortens fixed-length statuses by 1 (2 with the Grimoire)
 	if (isFinite(left) && compOn("Cherry")) left -= character.cherryShorten;
-	if (left > 0) character.statuses.push({name: name, add: add, mult: mult, left: left, cures: cures, dbl: !!dbl});
+	if (left > 0) { character.statuses.push({name: name, add: add, mult: mult, left: left, cures: cures, dbl: !!dbl}); note("Status: " + name + (isFinite(left) ? " (" + left + " trips)" : " (until cured)")); }
 	await lifespannerHeal();
 }
 function removeRelic(name) { // weight leaves whoever carries it
@@ -1566,10 +1850,10 @@ var curseConflicts = [["Shrunken Assets", /^Asset Robustness/], ["Sex Switcheroo
 	["Minish-ish", "Colossal-able"], ["Arm Army", "Ampu-Q-tie"], ["A Little Extra", "Null"]];
 function nameMatches(m, n) { return (m instanceof RegExp) ? m.test(n) : m == n; }
 async function askAirPlan(ifNot) { // water-adapted lungs can't breathe air: every layer except 9 needs a specific Override plan (asked once)
-	var airP = await uiPrompt("Your lungs have fully adapted to water and you can't breathe air. Type a specific creative plan for breathing outside the water (Override). Cancel or blank = " + ifNot + ".");
+	var airP = await uiPrompt("Your lungs have fully adapted to water and you can't breathe air. Type a specific creative plan for breathing outside the water (Override). OK with nothing typed = " + ifNot + ".");
 	if (airP === null || !airP.trim()) return false;
 	character.airPlan = true;
-	note("Override plan for breathing air: " + airP.trim());
+	note("Override plan (air): " + airP.trim());
 	return true;
 }
 function lungsAdapted() { return has("curses", "Seafolk") && !!character.curseBonuses["Seafolk"]; } // the Seafolk lung option: you can't breathe air
@@ -1578,8 +1862,7 @@ function curseFamily(n) { var b = n.replace(/ [A-G]$/, ""); return b != n && Obj
 function curseLevels() { // levels = the permanent Curses taken from a lettered family (any order, across layers) plus foraged permanent levels; conferred Curses never count
 	var fam = {};
 	character.curses.forEach(function(n) { var f = curseFamily(n); if (f) { fam[f] = fam[f] || {taken: 0, foraged: 0}; fam[f].taken += 1; } });
-	var dh = character.curses.filter(function(n) { return n == "Dizzying Heights"; }).length;
-	if (dh) fam["Dizzying Heights"] = {taken: dh, foraged: 0}; // a levelled Curse: each copy is one more level
+	character.curses.forEach(function(n) { if (cursesMultiple[n]) fam[n] = {taken: curseLevel(n), foraged: 0}; }); // a repeatable Curse: each copy is one more level
 	Object.keys(foragedLevelFx).forEach(function(k) { var n = character.effects[k]; if (n) { var f = foragedLevelFx[k]; fam[f] = fam[f] || {taken: 0, foraged: 0}; fam[f].foraged += n; } });
 	return fam;
 }
@@ -1592,6 +1875,18 @@ function nullRemoved() { // Null is gone: the cancelled points come back
 	character.nullZeroed.forEach(function(n) { character.corruption += curses[n]; });
 	character.nullZeroed = [];
 }
+function curseLevel(n) { return has("curses", n) ? (character.curseLvl[n] || 1) : 0; } // 0 = not held
+function curseCopies() { return character.curses.reduce(function(a, n) { return a + curseLevel(n); }, 0); } // total number of copies held (levels count)
+function addCurseCopy(n) { // a new Curse enters the list; a repeatable one already held just gains a level
+	if (has("curses", n)) character.curseLvl[n] = curseLevel(n) + 1;
+	else { character.curses.push(n); if (cursesMultiple[n]) character.curseLvl[n] = 1; }
+}
+function removeCurseCopy(n) { // one level goes; the Curse leaves the list with its last copy
+	var lv = curseLevel(n);
+	if (lv > 1) character.curseLvl[n] = lv - 1;
+	else { character.curses.splice(character.curses.indexOf(n), 1); delete character.curseLvl[n]; }
+}
+function curseLabel(n) { return cursesMultiple[n] ? n + " (level " + curseLevel(n) + ")" : n; }
 function curseBase(name, copiesHeld) { return (name == "Fluffy Tail" && copiesHeld > 0) ? 0 : curses[name]; } // Fluffy Tail: only the first copy gives corruption
 function conferredClash(name) { return character.conferred.filter(function(x) { return x != name && curseConflict(name, [x]); })[0] || null; } // a switched-on Managed Misfortune Curse that clashes with this one
 function conferredClashText(name, cc) { return name + " conflicts with your conferred " + cc + ": switch it off first (Actions menu, Relic, Managed Misfortune, then type: off " + cc + ")."; }
@@ -1612,27 +1907,28 @@ function hasTwin() { return character.twin && has("curses", "Double Trouble"); }
 function captiveWeight() { return has("items", "Rope") ? 0 : HUMAN_WEIGHT*character.captives; } // a bandit on a Rope trails behind you and counts as no weight
 async function offerCaptive() { // after an ambush is resolved you may also subdue one bandit with a weapon (Sword or Pistol) and a Rope, and bring it along (for the Bloodstained Sanctuary, far below)
 	if (!has("items", "Rope") || !(character.hasSword || has("items", "Pistol"))) return;
-	if (!await uiConfirm("Capture one of the bandits as well, using your weapon and Rope? He will trail behind you on the Rope (no weight); the Rope stays usable. (OK = capture, Cancel = no)")) return;
+	if (!await uiConfirm("Capture one of the bandits as well, using your weapon and Rope? He will trail behind you on the Rope (no weight); the Rope stays usable.", "Capture bandit", "No")) return;
 	character.captives += 1;
-	note("You subdue an Opportunistic Bandit and bind him with your Rope.");
+	note("Bandit subdued, bound with Rope");
 }
 function banditWorth() { return character.relics.reduce(function(sum, r) { return sum + relicValue(r); }, 0); } // devoured ones are invisible
 async function checkBandits() { // on emerging into layer 1 from a lower layer
 	if (banditWorth() < 150) return;
-	if (groupSize() >= 4) { note("Opportunistic Bandits see your group of " + groupSize() + " and back off."); return; }
+	if (groupSize() >= 4) { note("Bandits back off (group " + groupSize() + ")"); return; }
 	if (await huskNow("Opportunistic Bandits")) { shrugOff("Opportunistic Bandits"); return; }
 	var labels = [], acts = [];
-	if (character.ammo >= ammoCost(2)) { labels.push("fire 2 warning shots (" + ammoCost(2) + " bullet(s))"); acts.push(async function() { await ammoHandler(2); }); }
-	if (compOn("Khemia") && character.hasSword) { labels.push("Khemia drives them off with your Sword"); acts.push(function() {}); }
+	if (character.ammo >= ammoCost(2)) { labels.push("fire 2 warning shots (" + ammoCost(2) + " bullet(s))"); acts.push(async function() { if (await ammoHandler(2)) note("Opportunistic Bandits: warning shots (" + ammoCost(2) + " bullet(s))"); }); }
+	if (compOn("Khemia") && character.hasSword) { labels.push("Khemia drives them off with your Sword"); acts.push(function() { note("Opportunistic Bandits: Khemia drives them off with the Sword"); }); }
 	labels.push("drop Relics and escape"); acts.push(async function() {
 		var tries = 0;
 		while (banditWorth() >= 150) {
-			var r = (tries < 3) ? await uiPrompt("Drop a Relic to escape (worth now " + banditWorth() + ", must get under 150). You have: " + character.relics.join(", ")) : null;
+			var dropAns = (tries < 3) ? await uiForm("Drop a Relic to escape (your Relics are worth " + banditWorth() + " now; you must get under 150).", [{key: "relic", kind: "select", label: "Relic to drop", options: relicOptions(character.relics, function(x) { return "worth " + relicValue(x); })}]) : null;
+			var r = dropAns ? dropAns.relic : null;
 			tries++;
 			if (r === null && tries > 3) { // fall back: lose the most valuable Relic
 				var best = character.relics.slice().sort(function(x, y) { return relicValue(y) - relicValue(x); })[0];
-				removeRelic(best); note("You drop " + best + " to escape.");
-			} else if (r !== null && removeRelic(r.trim())) note("You drop " + r.trim() + " to escape.");
+				removeRelic(best); note("Dropped " + best + " to escape");
+			} else if (r !== null && removeRelic(r.trim())) note("Dropped " + r.trim() + " to escape");
 		};
 	});
 	await acts[await askChoice("Opportunistic Bandits ambush you (your Relics are worth " + banditWorth() + ")!", labels, true)]();
@@ -1640,20 +1936,20 @@ async function checkBandits() { // on emerging into layer 1 from a lower layer
 }
 async function resolveGourmet() {
 	var labels = [], acts = [];
-	if (character.hasSword) { labels.push("fight it off with your Sword"); acts.push(function() {}); }
-	if (character.ammo >= ammoCost(3)) { labels.push("shoot it (" + ammoCost(3) + " bullet(s))"); acts.push(async function() { await ammoHandler(3); }); }
-	if (character.food[0] >= 5) { labels.push("give up 5 days of food rations"); acts.push(function() { character.food[0] -= 5; character.itemWeight -= 5*items["Food Rations"][1]; }); }
+	if (character.hasSword) { labels.push("fight it off with your Sword"); acts.push(function() { note("Baying Gourmet: fought off with the Sword"); }); }
+	if (character.ammo >= ammoCost(3)) { labels.push("shoot it (" + ammoCost(3) + " bullet(s))"); acts.push(async function() { if (await ammoHandler(3)) note("Baying Gourmet: shot it (" + ammoCost(3) + " bullet(s))"); }); }
+	if (character.food[0] >= 5) { labels.push("give up 5 days of food rations"); acts.push(function() { character.food[0] -= 5; character.itemWeight -= 5*items["Food Rations"][1]; note("Baying Gourmet: gave up 5 days of food rations"); }); }
 	var k = await askChoice("A Baying Gourmet attacks!", labels, false);
-	if (k >= 0) await acts[k](); else await addStatus("mild limp", 1, 1, 4, 1);
+	if (k >= 0) await acts[k](); else { note("Baying Gourmet: you fight it barehanded"); await addStatus("mild limp", 1, 1, 4, 1); }
 }
 async function resolveDragon() {
 	var labels = [], acts = [];
 	if (compOn("Khemia") && hasRelic("Sunbeam") && !character.dragonAdapted) {
 		labels.push("Khemia fights it with the Sunbeam (moderate burns, +50 doubloons)");
-		acts.push(async function() { character.dragonAdapted = true; await addStatus("moderate burns", 2, 1, Infinity, 1); gainDoubloons(50); character.dragonsBeaten += 1; });
+		acts.push(async function() { character.dragonAdapted = true; note("Fell Dragon: Khemia fights it with the Sunbeam (+50 doubloons)"); await addStatus("moderate burns", 2, 1, Infinity, 1); gainDoubloons(50); character.dragonsBeaten += 1; });
 	};
-	if (character.doubloons >= 100 && !barterBlocked()) { labels.push("pay 100 doubloons"); acts.push(async function() { await doubloonHandler(100, 0); }); }
-	if (!hasCurse("Cellulose")) { labels.push("run with your doubloons (severe burns)"); acts.push(async function() { await addStatus("severe burns", 0, 2, Infinity, 2); }); }
+	if (character.doubloons >= 100 && !barterBlocked()) { labels.push("pay 100 doubloons"); acts.push(async function() { if (await doubloonHandler(100, 0)) note("Fell Dragon: paid 100 doubloons"); }); }
+	if (!hasCurse("Cellulose")) { labels.push("run with your doubloons (severe burns)"); acts.push(async function() { note("Fell Dragon: you run with your doubloons"); await addStatus("severe burns", 0, 2, Infinity, 2); }); }
 	if (!labels.length) { await die("The Fell Dragon kills you."); return; }
 	await acts[await askChoice("A Fell Dragon attacks!", labels, true)]();
 }
@@ -1661,9 +1957,9 @@ function gainDoubloons(n) { // under Barter System they still accumulate (in cas
 	if (n > 0) character.doubloons += n;
 }
 async function forcedHabitation(reason) { // a blocking prompt: only a specific Override plan avoids it; no plan = game over (never triggered automatically)
-	var plan = await uiPrompt("FORCED HABITATION: " + reason + "\nType a specific Override plan (what you do, with which Relics, companions or items) to escape it. Cancel or blank = game over.");
+	var plan = await uiPrompt("FORCED HABITATION: " + reason + "\nType a specific Override plan (what you do, with which Relics, companions or items) to escape it. OK with nothing typed = game over.");
 	if (plan === null || !plan.trim()) { await die(reason + " You have no Override plan: forced habitation.", true); return false; }
-	note("Override plan against forced habitation (" + reason + "): " + plan.trim());
+	note("Override plan (forced habitation, " + reason + "): " + plan.trim());
 	return true;
 }
 async function chargeTax() { // Taxdrone: under 100 dubloons pays 3 a day, 100 to 299 pays 2, 300 or more pays 1
@@ -1682,7 +1978,7 @@ async function die(reason, noRevive) { // noRevive: game-over situations the Pho
 		var spectre = /Spectre of the End/.test(reason);
 		if (spectre) character.spectreStartDay = character.days - 900 + 50; // the Spectre returns 50 days later; dying to anything else leaves its clock alone
 		await uiAlert(reason + " The Phoenix Obol revives you 2 hours later, at the same spot" + (spectre ? ", but the Spectre returns in 50 days." : "."));
-		note("Phoenix Obol: " + reason + " Revived 2 hours later" + (spectre ? "; the Spectre returns in 50 days." : "."));
+		note("Phoenix Obol: " + reason + " Revived" + (spectre ? "; Spectre returns in 50 days" : ""));
 		return;
 	};
 	character.dead = true; await uiAlert(reason); note(reason);
@@ -1697,7 +1993,7 @@ function dropCompanionsForVeil() { // anyone who observes you is overcome by fea
 	if (!character.companions.length) return;
 	var gone = character.companions.slice();
 	gone.forEach(removeCompanion);
-	note("Below the Veil: " + gone.join(", ") + " can't bear to look at you and leave for good.");
+	note("Below the Veil: " + gone.join(", ") + " leave for good");
 }
 function lifespannerUse() { // one of the Lifespanner's 7 heals today (a Medkit cure is one heal); false if none left
 	if (!hasRelic("Lifespanner")) return false;
@@ -1709,17 +2005,18 @@ function lifespannerUse() { // one of the Lifespanner's 7 heals today (a Medkit 
 }
 async function lifespannerHeal() { // injuries (and lost limbs) are healed at once, up to 7 heals a day; the rest wait for tomorrow. It never touches jinxed flame, which isn't a status.
 	if (!hasRelic("Lifespanner")) return;
+	if (character.limbsLost.arm + character.limbsLost.leg > 0) note("Lifespanner regrows your lost limbs");
 	character.limbsLost.arm = 0; character.limbsLost.leg = 0; await resolveGrasp();
 	for (var i = 0; i < character.statuses.length; ) {
 		var st = character.statuses[i];
 		while (st.cures > 0 && lifespannerUse()) st.cures -= 1;
-		if (st.cures <= 0) character.statuses.splice(i, 1); else i++;
+		if (st.cures <= 0) { note("Lifespanner heals: " + st.name); character.statuses.splice(i, 1); } else i++;
 		if (st.cures > 0) break; // out of heals for today
 	}
 }
 async function quickHeal(question) { // cure something at once: a Lifespanner heal if any is left today, otherwise a Medkit if you agree
-	if (lifespannerUse()) { note("The Lifespanner heals it at once."); return true; }
-	if (medkitIndex() >= 0 && await uiConfirm(question)) { consumeMedkit(); return true; }
+	if (lifespannerUse()) { note("Lifespanner heals it"); return true; }
+	if (medkitIndex() >= 0 && await uiConfirm(question, "Yes", "No")) { consumeMedkit(); note("Medkit used"); return true; }
 	return false;
 }
 function consumeMedkit() {
@@ -1740,16 +2037,16 @@ function removeWater(n) { // sacrificed water: River Dycx water first, then boug
 		n -= take;
 	};
 }
-function shootOption(labels, acts, n) { // a bullet option, if you can afford it (Cloud and the Grimoire reduce the cost)
+function shootOption(labels, acts, n, who) { // a bullet option, if you can afford it (Cloud and the Grimoire reduce the cost)
 	if (character.ammo >= ammoCost(n)) {
 		labels.push("shoot it (" + ammoCost(n) + " bullets)");
-		acts.push(async function() { await ammoHandler(n); });
+		acts.push(async function() { if (await ammoHandler(n)) note((who || "Threat") + ": shot it (" + ammoCost(n) + " bullet(s))"); });
 	};
 }
 async function resolveLesserBeast() { // layer 3
-	if (compOn("Khemia") && character.hasSword) { note("Khemia drives off a Lesser Tentacle Beast with the Sword: no injury."); return; }
+	if (compOn("Khemia") && character.hasSword) { note("Khemia + Sword drive off Lesser Tentacle Beast"); return; }
 	var labels = [], acts = [];
-	shootOption(labels, acts, 11);
+	shootOption(labels, acts, 11, "Lesser Tentacle Beast");
 	var k = await askChoice("A Lesser Tentacle Beast attacks!", labels, false);
 	if (k >= 0) { await acts[k](); return; }
 	if (character.hasSword) await addStatus("mild injuries", 2, 1, 3, 1); // next 3 travel costs +2 days
@@ -1757,14 +2054,14 @@ async function resolveLesserBeast() { // layer 3
 }
 async function resolveSwallower() { // layer 4
 	var labels = [], acts = [];
-	shootOption(labels, acts, 5);
+	shootOption(labels, acts, 5, "Drifting Swallower");
 	if (compOn("Khemia") && character.hasSword) {
 		labels.push("Khemia fights it with the Sword (serious injuries)");
-		acts.push(async function() { await addStatus("serious injuries", 1, 1, 6, 1); });
+		acts.push(async function() { note("Drifting Swallower: Khemia fights it with the Sword"); await addStatus("serious injuries", 1, 1, 6, 1); });
 	};
 	var k = await askChoice("A Drifting Swallower attacks!", labels, false);
 	if (k >= 0) { await acts[k](); return; }
-	note("You spend 3 days inside the Drifting Swallower.");
+	note("Drifting Swallower: 3 days");
 	await timeHandler(3, false, {noCounters: true});
 	await addStatus("light burns", 1, 1, Infinity, 1); // all travel costs +1 day until a medkit cures them
 }
@@ -1773,8 +2070,9 @@ async function springTrap(relicName) { // layer 5 Booby Traps: the column decide
 	var col = Object.keys(boobyColumns).find(function(k) { return boobyColumns[k].indexOf(relicName) >= 0; });
 	if (!col) return;
 	var n = ++character.trapColumns[col];
-	if (n >= 3) { note("Booby trap (" + boobyTraps[col] + "): no injuries, since this is your Relic number " + n + " from this column."); return; }
-	if (await uiConfirm("Booby trap (" + boobyTraps[col] + ")! Press OK only if you prepared for it (Override); Cancel = unprepared.")) { note("You avoid the " + boobyTraps[col] + " thanks to your preparation."); return; }
+	if (n >= 3) { note("Booby trap (" + boobyTraps[col] + "): no injury, column relic #" + n + ""); return; }
+	var prep = ((await uiPrompt("Booby trap (" + boobyTraps[col] + ")! If you prepared for it (Override), type how (which Relic, companion or item). OK with nothing typed = unprepared.")) || "").trim();
+	if (prep) { note("Booby trap (" + boobyTraps[col] + ") avoided, prepared with " + prep); return; }
 	if (character.statuses.length > 0) { await die("The " + boobyTraps[col] + " is fatal: you already had a status condition."); return; }
 	await addStatus("serious injuries (trap)", 3, 1, Infinity, 1); // all travel times +3 until a medkit heals them
 }
@@ -1783,15 +2081,17 @@ async function resolveBorer() { // layer 5: bullets fail
 	if (compOn("Khemia") && hasRelic("Sunbeam")) {
 		labels.push("Khemia beats it with the Sunbeam (1 day to recover, or use a Medkit)");
 		acts.push(async function() {
-			if (!await quickHeal("Use a Medkit to skip the recovery day?")) await timeHandler(1, false, {noCounters: true});
+			note("Dune Devouring Borer: Khemia beats it with the Sunbeam");
+			if (!await quickHeal("Use a Medkit to skip the recovery day?")) { note("Recovering: 1 day"); await timeHandler(1, false, {noCounters: true}); }
 		});
 	};
 	if (waterTotal() >= 10) {
 		labels.push("sacrifice 10 or more days of water as a distraction");
 		acts.push(async function() {
-			var n = parseInt(await uiPrompt("Sacrifice how many days' worth of water? (10 to " + waterTotal() + ")", "10"), 10);
-			if (!(n >= 10 && n <= waterTotal())) n = 10;
+			var sAns = await uiForm("Sacrifice how many days' worth of water to the Borer?", [{key: "n", kind: "number", label: "Days of water (10 to " + waterTotal() + ")", min: 10, max: waterTotal(), step: 1, def: 10}], null, true);
+			var n = Math.floor(sAns ? sAns.n : 10);
 			removeWater(n);
+			note("Dune Devouring Borer: sacrificed " + n + " days of water");
 		});
 	};
 	var k = await askChoice("A Dune Devouring Borer attacks! (bullets fail)", labels, false);
@@ -1799,7 +2099,7 @@ async function resolveBorer() { // layer 5: bullets fail
 }
 async function resolveGreaterBeast() { // layer 6: "tentacle fucked", unable to move
 	var labels = [], acts = [];
-	shootOption(labels, acts, 19);
+	shootOption(labels, acts, 19, "Greater Tentacle Beast");
 	var k = await askChoice("A Greater Tentacle Beast attacks!", labels, false);
 	if (k >= 0) { await acts[k](); return; }
 	var sunbeam = hasRelic("Sunbeam"), days, who = "You are";
@@ -1808,7 +2108,7 @@ async function resolveGreaterBeast() { // layer 6: "tentacle fucked", unable to 
 	else days = 12;
 	if (compOn("Cherry")) days = Math.max(0, days - character.cherryShorten);
 	if (days > 0 && await quickHeal("Use a Medkit to cure it at once (skipping " + days + " days)?")) return;
-	if (days > 0) { note(who + " unable to move for " + days + " days."); await timeHandler(days, false, {noCounters: true}); }
+	if (days > 0) { note(who + " immobile " + days + "d"); await timeHandler(days, false, {noCounters: true}); }
 }
 // ---- actions panel ----
 var RAISON_NAMES = {purity: "Yggdrasil Seed", wonders: "Eternal Return", husk: "Hardened Husk"};
@@ -1840,8 +2140,13 @@ async function chooseRaison() { // Actions menu at Nadir: the reward is one of t
 	if (character.dead || character.ended) return null;
 	if (currentLayer != 10) { await uiAlert("The Raison d'Etre can only be chosen at Nadir."); return null; }
 	if (character.raison) { await uiAlert("You already chose your Raison d'Etre."); return null; }
-	var ans = (await uiPrompt("RAISON D'ETRE: you may take one reward, once. Taking it closes L'appel du Vide for good (you can't have both); you may also take neither.\nType one of:\n- seed: the Yggdrasil Seed (the purity gene). You need no food or water, ascending costs no corruption, and the Spectre of the End ignores you; but you can't pick up Relics or descend layers.\n- return: Eternal Return. 3 reactivations: right click a Wonder you have used up to give it one more use (the same Wonder may be reactivated again).\n- husk: Hardened Husk. 3 immunities: the first time a threat would strike you, you may spend one to be immune to it for good.\n(Cancel to decline for now)") || "").trim().toLowerCase();
-	if (!ans) return null;
+	var raisonAns = await uiForm("RAISON D'ETRE: you may take one reward, once. Taking it closes L'appel du Vide for good (you can't have both); you may also take neither (Cancel to decline for now).", [{key: "reward", kind: "radio", options: [
+		{value: "seed", label: "Yggdrasil Seed (the purity gene)", desc: "You need no food or water, ascending costs no corruption, and the Spectre of the End ignores you; but you can't pick up Relics or descend layers."},
+		{value: "return", label: "Eternal Return", desc: "3 reactivations: right click a Wonder you have used up to give it one more use (the same Wonder may be reactivated again)."},
+		{value: "husk", label: "Hardened Husk", desc: "3 immunities: the first time a threat would strike you, you may spend one to be immune to it for good."}
+	]}]);
+	if (!raisonAns) return null;
+	var ans = raisonAns.reward;
 	if (ans == "seed" || ans == "yggdrasil seed" || ans == "purity" || ans == "purity gene") {
 		if (!await uiConfirm("Take the Yggdrasil Seed? You need no food or water, ascending costs no corruption, and the Spectre of the End ignores you; but you can't pick up Relics or descend layers. This is permanent and closes L'appel du Vide.")) return null;
 		character.purity = true; character.raison = {kind: "purity", detail: ""};
@@ -1850,21 +2155,32 @@ async function chooseRaison() { // Actions menu at Nadir: the reward is one of t
 	if (ans == "return" || ans == "eternal return" || ans == "wonders") {
 		if (!await uiConfirm("Take Eternal Return? You get 3 reactivations to spend by right clicking a Wonder you have used up. This is permanent and closes L'appel du Vide.")) return null;
 		character.raison = {kind: "wonders", detail: ""}; character.raisonLeft = 3;
-		return "Raison d'Etre: Eternal Return (3 reactivations: right click a used-up Wonder)";
+		return "Raison d'Etre: Eternal Return (3 reactivations, right click a used-up Wonder)";
 	};
 	if (ans == "husk" || ans == "hardened husk" || ans == "threats") {
 		if (!await uiConfirm("Take the Hardened Husk? You get 3 immunities, each spent the first time a threat would strike you (you can decline each time). This is permanent and closes L'appel du Vide.")) return null;
 		character.raison = {kind: "husk", detail: ""}; character.raisonLeft = 3;
 		return "Raison d'Etre: Hardened Husk (3 immunities, spent when a threat first strikes)";
 	};
-	await uiAlert("Type seed, return or husk.");
 	return null;
 }
+async function drinkWardWater() { // Actions menu: drink extra Ward Water (on top of the daily water, no time passes); each one removes one jinxed flame counter
+	var w = character.water, max = Math.min(Math.floor(w[2] + 1e-9), character.jinxedFlame);
+	if (max < 1) { await uiAlert(character.jinxedFlame > 0 ? "You have no Ward Water." : "You have no jinxed flame to remove."); return null; }
+	var n = 1;
+	if (max > 1) {
+		var wwAns = await uiForm("Drink how many Ward Water? Each one removes one jinxed flame counter, takes no time and is extra to your daily water. You have " + w[2] + " Ward Water and " + character.jinxedFlame + " jinxed flame counters.", [{key: "n", kind: "number", label: "Ward Water to drink (1 to " + max + ")", min: 1, max: max, step: 1, def: max}]);
+		if (!wwAns) return null;
+		n = Math.min(Math.floor(wwAns.n), max);
+	};
+	w[2] -= n; character.itemWeight -= 0.9*n; character.jinxedFlame -= n;
+	return "Item: Ward Water x" + n + " drunk (jinxed flame " + character.jinxedFlame + ")";
+}
 async function overrideEval() { // dev mode: runs the typed text with JS eval and logs it
-	var code = await uiPrompt("Override (JavaScript, run with eval; await works). Cancel or blank = nothing happens.");
+	var code = await uiPrompt("Override (run with Javascript eval). Leave blank = nothing happens.");
 	if (code === null || !code.trim()) return null;
 	get('log').value += "-Override: " + code + "\n";
-	try { await eval("(async function() {\n" + code + "\n})()"); } catch (err) { await uiAlert("Override error: " + err); }
+	try { await eval("(async function() {\n" + code + "\n})()"); } catch (err) { if (err === DLG_CANCEL) throw err; await uiAlert("Override error: " + err); }
 	return null;
 }
 async function doActionRaw() {
@@ -1874,13 +2190,14 @@ async function doActionRaw() {
 	else if (a == "relic") entry = await useRelic();
 	else if (a == "sell") entry = await sellRelic();
 	else if (a == "cherry") entry = await cherryLuck();
+	else if (a == "ward") entry = await drinkWardWater();
 	else if (a == "override") entry = await overrideEval();
 	if (entry && character.atPool && entry.indexOf("Managed Misfortune") < 0) character.atPool = false; // using items, Relics and so on also leaves the pool (switching a Curse via Managed Misfortune doesn't)
 	if (entry) get('log').value += "-" + entry + "\n";
 	updateInfo();
 }
 var BALLOON_TRIP_DAYS = 0.5; // ruled: any balloon trip (Escape, or the Commerce Balloon's round trip) takes half a day in total; it is a fixed time, not subject to travel modifiers
-var balloonHopDays = 0; // time charged for the next Escape Balloon hop (half a day for the first, nothing for the rest)
+var balloonHopDays = 0; // time charged per Escape Balloon hop: always 0 (the flight pays its half day once, at the end)
 var balloonFlight = false; // true while the Escape Balloon makes a hop (takeAction's portal branch then flies instead of walking)
 function consumeItem(name) { var k = character.items.indexOf(name); if (k < 0) return false; character.items.splice(k, 1); character.itemWeight -= items[name][1]; return true; }
 async function balloonLayerOK() { // balloons work in layers 1 to 7 only
@@ -1897,56 +2214,122 @@ async function useMessengerBalloon() { // information only. A Smartphone counts 
 	await timeHandler(BALLOON_TRIP_DAYS, false);
 	return "Item: Messenger Balloon sends word to the surface (information only)";
 }
-async function useEscapeBalloon() { // a fast ascent: every layer's corruption is still paid, each hop takes ESCAPE_DAYS_PER_LAYER; you may stop to collect things, which ends the flight
+async function useEscapeBalloon() { // a fast ascent: every layer's corruption is still paid, each hop takes ESCAPE_DAYS_PER_LAYER; at every hop you may take that layer's Curses (the flight is only paused); stopping to collect other things ends the flight
 	if (!has("items", "Escape Balloon")) { await uiAlert("You have no Escape Balloon!"); return null; }
 	if (!await balloonLayerOK()) return null;
-	var from = currentLayer, used = false, stopped = false;
-	balloonHopDays = BALLOON_TRIP_DAYS;
-	while (currentLayer >= 1 && !character.dead && !character.ended) {
-		var k = currentLayer;
-		balloonFlight = true;
-		try { await takeAction("portal:" + (k - 1) + "up"); } finally { balloonFlight = false; }
-		if (currentLayer == k) { if (used) note("The Escape Balloon can go no further: the flight ends in layer " + k + "."); break; } // could not pay or died
-		if (!used) { consumeItem("Escape Balloon"); used = true; balloonHopDays = 0; } // the half day was spent on the first hop
-		if (currentLayer == 0 || character.dead || character.ended) break;
-		if (await uiConfirm("Escape Balloon: you are passing through layer " + currentLayer + ". Stop here to collect things? Stopping ends the flight.\n\nOK = stop here, Cancel = keep flying.")) { stopped = true; break; }
-	}
-	return used ? "Item: Escape Balloon from layer " + from + (stopped ? ", stopped in layer " + currentLayer : (currentLayer == 0 ? " to the surface" : ", ended in layer " + currentLayer)) : null;
+	character.escapeFlight = {from: currentLayer, used: false}; // used = the balloon has taken you at least one hop (time is frozen during the flight; its half day is paid at the end)
+	balloonHopDays = 0;
+	return await runEscapeFlight(false);
 }
-async function useCommerceBalloon() { // order supplies and sell Relics from where you are; single use; no companions
+async function runEscapeFlight(afterArrival) { // flies hop by hop. A hop that pauses for Curses suspends the flight (character.escapeFlight stays set): clicking the same portal arrives and takes off again
+	var fl = character.escapeFlight, stopped = false;
+	while (fl && !character.dead && !character.ended) {
+		if (!afterArrival) {
+			if (currentLayer < 1) break;
+			var k = currentLayer;
+			balloonFlight = true;
+			try { await takeAction("portal:" + (k - 1) + "up"); } finally { balloonFlight = false; }
+			if (character.pendingArrival) { // paused before arrival: the time is paid, the Curses of this layer can be taken now
+				if (!fl.used) { consumeItem("Escape Balloon"); fl.used = true; }
+				return "Item: Escape Balloon from layer " + fl.from + ", paused in layer " + currentLayer + " (take Curses, then click the same portal to fly on)";
+			}
+			if (currentLayer == k) { if (fl.used) note("Escape Balloon ends in layer " + k); break; } // could not pay or died
+			if (!fl.used) { consumeItem("Escape Balloon"); fl.used = true; }
+		};
+		afterArrival = false;
+		if (currentLayer == 0 || character.dead || character.ended) break;
+		if (await uiConfirm("Escape Balloon: you are passing through layer " + currentLayer + ". Stop here to collect things? Stopping ends the flight.", "Stop here", "Keep flying")) { stopped = true; break; }
+	}
+	if (fl && fl.used && !character.dead && !character.ended) await timeHandler(BALLOON_TRIP_DAYS, false, {noCounters : true}); // the flight's half day, paid once at the end wherever it ends; no threat has time to act (a flight that never left the launch layer costs nothing)
+	var res = (fl && fl.used) ? "Item: Escape Balloon from layer " + fl.from + (stopped ? ", stopped in layer " + currentLayer : (currentLayer == 0 ? " to the surface" : ", ended in layer " + currentLayer)) : null;
+	character.escapeFlight = null;
+	if (res && !character.dead && !character.ended && currentLayer >= 1) { // landing: only now is the layer checked for auto-foraging
+		var landNames = autoForageNames();
+		if (landNames.length) res += "\n*Auto-foraging enabled: " + landNames.join(", ");
+	};
+	return res;
+}
+async function useCommerceBalloon() { // order supplies and sell Relics from where you are, as many of each as you like in one go; single use; no companions
 	if (!has("items", "Commerce Balloon")) { await uiAlert("You have no Commerce Balloon!"); return null; }
 	if (!await balloonLayerOK()) return null;
 	var shop = overlays[0].filter(function(o) { return o[0].indexOf("item:") == 0; }).map(function(o) { return o[0].substring(5); }).filter(function(n) { return n.search(/Maru|Lily|Khemia|Cherry|Cloud|Saeko/) < 0; });
-	if (shop.indexOf("Ammo") < 0) shop.push("Ammo");
+	if (shop.indexOf("Ammo") < 0) shop.splice(shop.indexOf("Pistol") + 1, 0, "Ammo"); // Ammo right under the Pistol
 	consumeItem("Commerce Balloon"); // taken out first so its own weight doesn't count; given back if nothing happens
-	var did = [];
-	for (var guard = 0; guard < 40; guard++) {
-		var cmd = await uiPrompt("Commerce Balloon (single use; companions can't be hired). Type: <item> [xN] to order, sell <Relic>, or done.\nShop: " + shop.join(", "));
-		if (cmd === null) break;
-		cmd = cmd.trim();
-		if (!cmd || /^done$/i.test(cmd)) break;
-		var m = /^sell\s+(.+)$/i.exec(cmd);
-		if (m) { var sold = await sellRelic(true, m[1].trim()); if (sold) did.push(sold); continue; } // brought up by balloon: no Lily bonus
-		m = /^(.+?)(?:\s*x\s*(\d+))?$/i.exec(cmd);
-		var nm = shop.filter(function(n) { return n.toLowerCase() == m[1].trim().toLowerCase(); })[0], qty = m[2] ? Math.min(parseInt(m[2], 10), 20) : 1;
-		if (!nm) { await uiAlert("The balloon can't order that."); continue; }
-		if (nm == "Pistol" && has("items", "Pistol")) nm = "Ammo";
-		for (var q = 0; q < qty; q++) {
-			var why = refusalReason("item:" + nm, currentLayer);
-			if (why) { await uiAlert(why); break; }
-			await takeAction("item:" + nm);
-			did.push(nm);
-		};
+	var sellable = byName(character.relics.filter(function(x) { return !(x == "Forbidden Grimoire" && character.grimoireUsed); }));
+	var buyOptions = shop.map(function(n) {
+		var owned = character.items.filter(function(x) { return x == n; }).length;
+		var max = maxStock[n] ? Math.max(0, maxStock[n] - owned) : (canBuyMultiple.indexOf(n) >= 0 ? 99 : (has("items", n) ? 0 : 1)); // one-off items can only be bought once
+		return {value: n, label: n + " \u2014 " + (items[n] ? items[n][0] : "?") + (items[n] && items[n][0] == 1 ? " dubloon" : " dubloons") + (max < 1 ? " (already owned)" : ""), max: max};
+	});
+	var sellOptions = relicOptions(sellable, function(x) { return relicValue(x) + " dubloons"; });
+	var cloud = compOn("Cloud"); // with Cloud the part of the price you don't pay in dubloons goes onto the loan, with interest applied at once (as if finalized)
+	function orderSums(v) { // gain = what the sales leave after paying a Cloud loan off first (source rule); it goes toward the price on its own, besides the doubloons you enter from what you carry
+		var cost = 0, n = 0;
+		Object.keys(v.buy).forEach(function(k) { cost += items[k][0]*v.buy[k]; n += v.buy[k]; });
+		var sold = (v.sell || []).reduce(function(a, r) { return a + relicValue(r); }, 0), repay = Math.min(sold, character.loan);
+		return {cost: cost, n: n, gain: sold - repay, sold: sold, repay: repay};
 	}
-	if (!did.length) { character.items.push("Commerce Balloon"); character.itemWeight += items["Commerce Balloon"][1]; return null; }
+	var fields = [{key: "buy", kind: "lines", label: "Supplies to order", addLabel: "Add item to order", options: buyOptions}];
+	if (sellOptions.length) fields.push({key: "sell", kind: "lines", qty: false, label: "Relics to sell", addLabel: "Add Relic to sell", options: sellOptions});
+	fields.push({key: "paid", kind: "number", label: "Doubloons you pay out of pocket (you carry " + character.doubloons + "; blank = 0)", min: 0, step: 1, optional: true});
+	var cb = null;
+	try {
+		cb = await uiForm("Commerce Balloon (single use; companions can't be hired). Add any supplies you want delivered (up to 99 quantity for each item), and any Relics you want to sell." + (cloud ? "\nAll value from sold Relics goes toward your Cloud loan first. Whatever is left after that, together with any doubloons you choose to pay out of pocket, covers the order. Any deficit is added to your loan with 20% interest (rounded down), so every dubloon you pay out of pocket avoids interest." : "\nAll value from sold Relics, together with any doubloons you choose to pay out of pocket, must cover the whole order.") + " Press OK to send the order.", fields, function(v) {
+			var t = orderSums(v);
+			if (!t.n && !(v.sell || []).length) return "Choose something to order or sell.";
+			var d = (v.paid === null || v.paid === undefined) ? 0 : v.paid;
+			if (!cloud && t.cost > 0 && barterBlocked()) return "Barter System: your dubloons are unusable without a companion to buy for you.";
+			if (d > character.doubloons) return "You carry only " + character.doubloons + " dubloons.";
+			var pool = t.gain + d, net = t.cost - pool, over = Math.max(0, -net), n = Math.max(0, net);
+			var l1 = "Total sell value: " + t.sold;
+			var l2 = "Net supplies cost: " + t.cost + " \u2212 " + d + (t.gain > 0 ? " \u2212 " + t.gain : "") + " = " + n + (over > 0 ? " (" + over + " left over stays yours)" : "");
+			var l3 = "New loan amount: " + character.loan + " \u2212 " + t.repay + " + " + Math.floor(1.2*n) + " = " + (character.loan - t.repay + Math.floor(1.2*n));
+			var lines = l1 + "\n" + l2 + (cloud ? "\n" + l3 : "");
+			if (!cloud && n > 0) return lines + "\nThe order isn't covered: enter more doubloons or sell more.";
+			return {info: lines};
+		});
+	} catch (e) { character.items.push("Commerce Balloon"); character.itemWeight += items["Commerce Balloon"][1]; throw e; } // Cancel: the balloon stays (and the action is rolled back anyway)
+	var sellLog = [], doubloons0 = character.doubloons;
+	var sellList = cb.sell || [];
+	for (var si = 0; si < sellList.length; si++) { var r = sellList[si], v = relicValue(r); if (await sellRelic(true, r)) sellLog.push(r + " " + v); } // brought up by balloon: no Lily bonus
+	var t2 = orderSums({buy: cb.buy, sell: []}), carriedNow = doubloons0, gainNow = character.doubloons - doubloons0;
+	var pay = Math.min(gainNow + Math.min((cb.paid === null || cb.paid === undefined) ? 0 : cb.paid, carriedNow), t2.cost), held = character.doubloons - pay; character.doubloons = pay; // only the doubloons you chose are used (the rest are set aside); with Cloud the price beyond `pay` becomes loan
+	var loanBefore = character.loan, spentBefore = character.doubloons, buyLog = [];
+	quietItemLog = true;
+	try {
+		for (var bi = 0; bi < buyOptions.length; bi++) {
+			var nm = buyOptions[bi].value, qty = cb.buy[nm] || 0, bought = 0;
+			if (!qty) continue;
+			if (nm == "Pistol" && has("items", "Pistol")) nm = "Ammo";
+			for (var q = 0; q < qty; q++) {
+				var why = refusalReason("item:" + nm, currentLayer);
+				if (why) { await uiAlert(why); break; }
+				var d0 = character.doubloons, l0 = character.loan;
+				await takeAction("item:" + nm);
+				if (character.doubloons >= d0 && character.loan <= l0) break; // nothing was bought (too heavy, out of stock...): stop this item
+				bought++;
+			};
+			if (bought) buyLog.push(nm + (bought > 1 ? " x" + bought : ""));
+		}
+	} finally { quietItemLog = false; }
+	var borrowed = character.loan - loanBefore, paidNow = spentBefore - character.doubloons;
+	if (borrowed > 0) { character.loan += Math.floor(1.2*borrowed) - borrowed; character.loanFinalized = true; } // interest at once, like an immediate finalization
+	character.doubloons += held;
+	if (!buyLog.length && !sellLog.length) { character.items.push("Commerce Balloon"); character.itemWeight += items["Commerce Balloon"][1]; return null; }
 	await timeHandler(BALLOON_TRIP_DAYS, false); // the round trip of the balloon
-	return "Item: Commerce Balloon (" + did.join(", ") + ")";
+	var parts = [];
+	if (buyLog.length) parts.push("buy (" + buyLog.join(", ") + ")");
+	if (sellLog.length) parts.push("sell (" + sellLog.join(", ") + ")");
+	if (paidNow > 0) parts.push("paid " + paidNow);
+	if (borrowed > 0) parts.push("loan +" + Math.floor(1.2*borrowed) + " (borrowed " + borrowed + ")");
+	return "Commerce Balloon: " + parts.join(", ");
 }
 async function useItem() {
-	var owned = ["Medkit", "Torch", "Messenger Balloon", "Smartphone", "Commerce Balloon", "Escape Balloon"].filter(function(x) { return has("items", x); });
-	var n = await uiPrompt("Use which item? (" + (owned.length ? owned.join(", ") : "Medkit or Torch") + ")");
-	if (n === null) return null;
-	n = n.trim().toLowerCase();
+	var owned = ["Medkit", "Torch", "Messenger Balloon", "Smartphone", "Commerce Balloon", "Escape Balloon"].filter(function(x) { return x == "Medkit" ? medkitIndex() >= 0 : has("items", x); }); // any Medkit counts (surface, vending or vault)
+	if (!owned.length) { await uiAlert("You have no item you can use."); return null; }
+	var itemAns = await uiForm("Use which item?", [{key: "item", kind: "select", label: "Item", options: owned}]);
+	if (!itemAns) return null;
+	var n = itemAns.item.toLowerCase();
 	if (n == "escape balloon") return await useEscapeBalloon();
 	if (n == "commerce balloon") return await useCommerceBalloon();
 	if (n == "messenger balloon" || n == "smartphone") return await useMessengerBalloon();
@@ -1959,10 +2342,9 @@ async function useItem() {
 		var k = character.items.findIndex(function(x) { return x.indexOf("Medkit") == 0; });
 		if (k < 0) { await uiAlert("You have no Medkit!"); return null; }
 		if (!character.statuses.length) { await uiAlert("You have nothing to cure (a Medkit can't cure jinxed flame)."); return null; }
-		var txt = "Cure which status?\n";
-		character.statuses.forEach(function(st, i) { txt += (i + 1) + ": " + st.name + (st.cures > 1 ? " (needs " + st.cures + " medkits)" : "") + "\n"; });
-		var i = parseInt(await uiPrompt(txt, "1"), 10) - 1;
-		if (!(i >= 0 && i < character.statuses.length)) return null;
+		var cureAns = await uiForm("Cure which status?", [{key: "status", kind: "radio", def: 0, options: character.statuses.map(function(st, i) { return {value: i, label: st.name, desc: st.cures > 1 ? "needs " + st.cures + " medkits" : ""}; })}]);
+		if (!cureAns) return null;
+		var i = cureAns.status;
 		var st = character.statuses[i];
 		character.itemWeight -= items[character.items[k]][1];
 		character.items.splice(k, 1);
@@ -1974,9 +2356,10 @@ async function useItem() {
 }
 async function useRelic() {
 	var usable = usableRelics();
-	var n = await uiPrompt("Use which Relic?" + (usable.length ? " (" + usable.join(", ") + ")" : ""));
-	if (n === null) return null;
-	n = n.trim();
+	if (!usable.length) { await uiAlert("None of your Relics has a usable action here."); return null; }
+	var useAns = await uiForm("Use which Relic?", [{key: "relic", kind: "select", label: "Relic", options: relicOptions(usable)}]);
+	if (!useAns) return null;
+	var n = useAns.relic;
 	if (n == "Managed Misfortune") return await useManagedMisfortune();
 	if (n == "Kin Shifter") return await useKinShifter();
 	if (n == "Ring of the Devourer") return await useRing();
@@ -1989,18 +2372,45 @@ async function useRelic() {
 async function useGranite() { // 5 uses in total: each strengthens one Relic (the shape stays strengthened even if the Clockwork Forge moves its ability)
 	if (!hasRelic("Granted Granite")) { await uiAlert("You don't have Granted Granite!"); return null; }
 	if (character.granite.length >= 5) { await uiAlert("Granted Granite has no uses left (5 of 5 spent)."); return null; }
-	var r = (await uiPrompt("Strengthen which Relic you own? (" + character.granite.length + " of 5 uses spent) You have: " + character.relics.join(", ")) || "").trim();
-	if (!has("relics", r)) { await uiAlert("You don't have that Relic!"); return null; }
-	if (r == "Perpetual Repose") { await uiAlert("Perpetual Repose is already immune."); return null; }
-	if (isStrengthened(r)) { await uiAlert("That Relic is already strengthened."); return null; }
+	var graniteList = character.relics.filter(function(x) { return x != "Perpetual Repose" && !isStrengthened(x); }); // Perpetual Repose is already immune
+	if (!graniteList.length) { await uiAlert("Every Relic you own is already strengthened (or immune)."); return null; }
+	var graniteAns = await uiForm("Strengthen which Relic you own? (" + character.granite.length + " of 5 uses spent)", [{key: "relic", kind: "select", label: "Relic", options: relicOptions(graniteList)}]);
+	if (!graniteAns) return null;
+	var r = graniteAns.relic;
 	character.granite.push(shapeId(r));
 	return "Relic: Granted Granite strengthens " + r + " (" + character.granite.length + " of 5 uses)";
 }
 async function useManagedMisfortune(cmdText) { // cmdText (optional) replaces the prompt, e.g. from a shift-click on a Curse
 	if (!has("relics", "Managed Misfortune")) { await uiAlert("You don't have Managed Misfortune!"); return null; }
-	var m = (cmdText !== undefined ? cmdText : (await uiPrompt("Managed Misfortune (2 marbles). Type: store <curse> (a Curse from this layer), on <curse>, off <curse> or drop <curse> (empty its marble)") || "")).trim().match(/^(store|on|off|drop)\s+(.+)$/i);
-	if (!m) return null;
-	var cmd = m[1].toLowerCase(), cname = m[2].trim();
+	var cmd, cname;
+	if (cmdText !== undefined) { // from a right click on a Curse: "store <curse>"
+		var m = String(cmdText).trim().match(/^(store|on|off|drop)\s+(.+)$/i);
+		if (!m) return null;
+		cmd = m[1].toLowerCase(); cname = m[2].trim();
+	} else {
+		var storable = overlays[currentLayer].map(function(o) { return typeof o[0] == "string" && o[0].indexOf("curse:") == 0 ? o[0].substring(6) : null; }).filter(function(c) {
+			return c && !has("curses", c) && !has("unselectableCurses", c) && !character.marbles.some(function(x) { return x.name == c; }) && c != "Double Trouble" && c != "Conjoined";
+		});
+		var canStore = character.marbles.length < 2 && storable.length > 0, haveMarbles = character.marbles.length > 0;
+		if (!canStore && !haveMarbles) { await uiAlert(character.marbles.length >= 2 ? "Both marbles are full." : "There is no Curse on this layer you can store."); return null; }
+		var mmActs = [];
+		if (canStore) mmActs.push({value: "store", label: "Store a Curse from this layer", desc: "Choose it in the first menu. Storing gives no corruption."});
+		if (haveMarbles) mmActs.push({value: "on", label: "Switch on a stored Curse", desc: "Its effect is conferred until you switch it off."}, {value: "off", label: "Switch off a stored Curse"}, {value: "drop", label: "Empty a marble", desc: "The stored Curse is lost from the marble (and switched off first)."});
+		var mmAns = await uiForm("Managed Misfortune (" + character.marbles.length + " of 2 marbles full).", [
+			{key: "act", kind: "radio", label: "Action", options: mmActs},
+			[{key: "store", kind: "select", label: "Curse to store (this layer)", options: byName(storable), optional: true},
+			 {key: "marble", kind: "select", label: "Stored Curse", options: character.marbles.map(function(x) { return {value: x.name, label: x.name + (x.on ? " (on)" : " (off)")}; }), optional: true}]
+		], function(v) {
+			if (v.act == "store") return v.store ? "" : "Choose the Curse to store.";
+			var mb = character.marbles.find(function(x) { return x.name == v.marble; });
+			if (!mb) return "Choose a stored Curse.";
+			if (v.act == "on" && mb.on) return mb.name + " is already switched on.";
+			if (v.act == "off" && !mb.on) return mb.name + " is already switched off.";
+			return "";
+		});
+		if (!mmAns) return null;
+		cmd = mmAns.act; cname = cmd == "store" ? mmAns.store : mmAns.marble;
+	};
 	if (cmd == "store") {
 		if (character.marbles.length >= 2) { await uiAlert("Both marbles are full."); return null; }
 		if (!overlays[currentLayer].some(function(o) { return o[0] == "curse:" + cname; })) { await uiAlert("That Curse isn't on this layer!"); return null; }
@@ -2044,12 +2454,13 @@ function mmSwitchOff(marble) {
 }
 async function useKinShifter() { // 70 dubloons of sell value to spend; a Relic worth over 70 only as the sole copy
 	if (!has("relics", "Kin Shifter")) { await uiAlert("You don't have Kin Shifter!"); return null; }
-	var r = (await uiPrompt("Copy which Relic you own? (Kin Shifter has spent " + character.kinSpent + " of 70)") || "").trim();
-	if (!has("relics", r)) { await uiAlert("You don't have that Relic!"); return null; }
-	if (r == "Kin Shifter") { await uiAlert("Kin Shifter can't copy itself."); return null; }
+	var kinList = character.relics.filter(function(x) { return x != "Kin Shifter" && character.kinSpent < 70 && !(relicValue(x) > 70 && character.kinSpent > 0); }); // can't copy itself; a Relic worth over 70 only as the sole copy
+	if (!kinList.length) { await uiAlert("Kin Shifter has no Relic it can copy now (" + character.kinSpent + " of 70 spent)."); return null; }
+	var kinAns = await uiForm("Copy which Relic you own? (Kin Shifter has spent " + character.kinSpent + " of 70)", [{key: "relic", kind: "select", label: "Relic", options: relicOptions(kinList, function(x) { return "worth " + relicValue(x); })}]);
+	if (!kinAns) return null;
+	var r = kinAns.relic;
 	if (!await fits(relicWeight(r))) return null;
 	var v = relicValue(r);
-	if (character.kinSpent >= 70 || (v > 70 && character.kinSpent > 0)) { await uiAlert("Kin Shifter can't copy that now."); return null; }
 	character.kinSpent += v; // the last copy may overshoot 70
 	character.relics.push(r); // a permanent copy: same weight and value, no corruption or time cost
 	character.itemWeight += relicWeight(r);
@@ -2057,16 +2468,21 @@ async function useKinShifter() { // 70 dubloons of sell value to spend; a Relic 
 }
 async function useRing() {
 	if (!has("relics", "Ring of the Devourer") && !character.ringAbsorbed) { await uiAlert("You don't have the Ring of the Devourer!"); return null; }
-	var r = (await uiPrompt("Absorb which Relic? You have: " + character.relics.join(", ")) || "").trim();
-	if (r == "Perpetual Repose") { await uiAlert("The Ring can't absorb Perpetual Repose."); return null; }
+	var ringList = character.relics.filter(function(x) { return x != "Perpetual Repose"; }); // the Ring can't absorb Perpetual Repose
+	if (!ringList.length) { await uiAlert("You have no Relic the Ring could absorb."); return null; }
+	var ringAns = await uiForm("Absorb which Relic?", [{key: "relic", kind: "select", label: "Relic", options: relicOptions(ringList)}]);
+	if (!ringAns) return null;
+	var r = ringAns.relic;
 	if (!devour(r)) { await uiAlert("You don't have that Relic!"); return null; }
 	return "Relic: Ring of the Devourer absorbs " + r;
 }
 function grimoireFor(name) { return (character.grimoireWho == name && has("companions", name)) ? 2 : 1; } // x2 if this companion read the Forbidden Grimoire (it leaves with them)
 async function useGrimoire() { // read by a companion: doubles the numeric benefit of their ability (once)
 	if (!has("relics", "Forbidden Grimoire") || character.grimoireUsed) { await uiAlert("You have no unused Forbidden Grimoire."); return null; }
-	var who = (await uiPrompt("Which companion reads it? (" + (character.companions.join(", ") || "you have none") + ")") || "").trim();
-	if (!has("companions", who)) { await uiAlert("That companion isn't with you!"); return null; }
+	if (!character.companions.length) { await uiAlert("You have no companion to read it."); return null; }
+	var whoAns = await uiForm("Which companion reads the Forbidden Grimoire? It doubles the numeric benefit of their ability, once, and leaves with them.", [{key: "who", kind: "radio", options: character.companions.slice()}]);
+	if (!whoAns) return null;
+	var who = whoAns.who;
 	if (who == "Khemia") character.travelTimeSave += 2; // -4 days on travel costs
 	else if (who == "Saeko") character.corruptionSave += 5;
 	else if (who == "Cloud") character.cloudBulletSave += 2;
@@ -2089,24 +2505,26 @@ async function takeAction(obj) {
 		updateInfo();
 		return;
 	};
-	var pa = character.pendingArrival, resuming = false;
+	var pa = character.pendingArrival, resuming = false, continueFlight = false;
 	if (pa) { // a crossing is paused before arrival: only Curses and the same portal are accepted; every other click is ignored
 		if (type == "curse") { /* fine */ }
-		else if (type == "portal" && name == pa.portal && currentLayer == pa.layer) resuming = true;
+		else if (type == "portal" && name == pa.portal && currentLayer == pa.layer) { resuming = true; continueFlight = !!character.escapeFlight; }
 		else return;
 	};
 	if (type == "portal") {
 		var portalName = name;
 		if (character.purity && /down$/.test(name)) { await uiAlert(SEED_NO_DESCENT); return; }
-		if (resuming) { /* the costs were paid when the crossing began */ }
+		var pausable = !resuming && overlays[currentLayer].some(function(o) { return o[0].indexOf("curse:") == 0; }); // the crossing will offer a pause for Curses: its corruption is charged on arrival
+		if (resuming) { /* time, food and water were paid when the crossing began; the corruption is charged below */ }
 		else if (name == "1down") {
 			if (character.loan > 0 && !character.loanFinalized) {
 				character.loan = Math.floor(1.2*character.loan);
 				character.loanFinalized = true;
+				note("Cloud loan finalized with interest: " + character.loan + " dubloons");
 			};
 		} else if (name == "0up") {
 			var surfaceCost = seedFreeAscent("0up") ? 0 : Math.max(0, portals["0up"][1] - corruptSave() + 5*flameLevel());
-			if (character.corruption - surfaceCost < 0) { await uiAlert("Cannot leave the Abyss with negative corruption!"); return; }
+			if (!pausable && character.corruption - surfaceCost < 0) { await uiAlert("Cannot leave the Abyss with negative corruption!"); return; }
 		} else if (name == "5down") {
 			if (has("items", "Rope")) timeSave = 11;
 		} else if (name == "4up") {
@@ -2123,21 +2541,19 @@ async function takeAction(obj) {
 			var cn = character.companions.slice();
 			vodFollowers = [];
 			if (cn.length) {
-				var fa = await uiPrompt("Which companions follow you down? Type their names separated by commas (" + cn.join(", ") + "), or leave blank for nobody. The others ascend alone. (Cancel to stay.)");
-				if (fa === null) return;
-				var want = fa.split(",").map(function(x) { return x.trim().toLowerCase(); }).filter(function(x) { return x; });
-				var bad = want.filter(function(w) { return !cn.some(function(c) { return c.toLowerCase() == w; }); });
-				if (bad.length) { await uiAlert("Not one of your companions: " + bad.join(", ") + "."); return; }
-				vodFollowers = cn.filter(function(c) { return want.indexOf(c.toLowerCase()) >= 0; });
+				var fa = await uiForm("Which companions follow you down? The others ascend alone. (Cancel to stay where you are.)", [{key: "who", kind: "check", options: cn.slice(), def: []}]);
+				if (!fa) return;
+				vodFollowers = cn.filter(function(c) { return fa.who.indexOf(c) >= 0; });
 			};
 		};
 		if (!resuming && lungsAdapted() && !character.airPlan && parseInt(name.replace(/up|down/g, ""), 10) != 9 && !await askAirPlan("you stay where you are")) return; // arriving in any air layer (every layer except 9)
 		var freeRetry = (portalName == "9down" && character.atPool) || resuming; // you already made the journey (at the pool, or a paused crossing)
 		var flight = (freeRetry || balloonFlight) ? null : await offerFlight(portalName, portals[name][0] - timeSave);
-		if (!freeRetry && !seedFreeAscent(portalName) && !await corruptionHandler(portals[name][1] - corruptSave())) return;
+		if (!freeRetry && !pausable && !seedFreeAscent(portalName) && !await corruptionHandler(portals[name][1] - corruptSave())) return;
+		if (resuming && pa.corrDue && !await payCrossingCorruption(portalName)) return; // still paused: take more Curses first
 		if (flight) {
 			flight.leaving.forEach(removeCompanion);
-			if (flight.leaving.length) note("You leave your companions behind: " + flight.leaving.join(", ") + ".");
+			if (flight.leaving.length) note("Companions left behind: " + flight.leaving.join(", "));
 		};
 		if (!freeRetry) {
 			flyingNow = !!flight;
@@ -2145,20 +2561,27 @@ async function takeAction(obj) {
 			try { tripOk = await timeHandler(balloonFlight ? balloonHopDays : (flight ? flight.base : portals[name][0] - timeSave), !balloonFlight, {flying : !!flight}); } finally { flyingNow = false; }
 			if (!tripOk || character.dead) return;
 		};
-		if (!resuming && !balloonFlight && overlays[currentLayer].some(function(o) { return o[0].indexOf("curse:") == 0; }) &&
-			await uiConfirm("The trip is paid for (time, food, water and corruption). Before you enter layer " + name.replace(/up|down/g, "") + ": take any new Curses from layer " + currentLayer + " first?\n\nOK = stay put for now: click any of this layer's Curses. Every other click is ignored (it turns red when you point at it, with the reason). Then click the same portal again to enter layer " + name.replace(/up|down/g, "") + " with nothing more to pay.\nCancel = enter layer " + name.replace(/up|down/g, "") + " now.")) {
-			character.pendingArrival = {layer: currentLayer, portal: portalName};
-			note("Crossing paused before layer " + name.replace(/up|down/g, "") + ": take this layer's Curses now, then click the same portal again.");
+		var corrDue = pausable && !freeRetry && !seedFreeAscent(portalName);
+		var wantPause = pausable &&
+			await uiConfirm((character.escapeFlight ? "This balloon hop is paid for (the flight's half day is charged when the flight ends; the corruption is charged when you enter)." : "The trip is paid for (time, food and water; the corruption is charged when you enter).") + " Before you enter layer " + name.replace(/up|down/g, "") + ": take any new Curses from layer " + currentLayer + " first?\n\nTake Curses first = stay put for now: click any of this layer's Curses. Every other click is ignored (it turns red when you point at it, with the reason). Then click the same portal again to enter layer " + name.replace(/up|down/g, "") + " (the corruption cost is charged then).\nEnter now = enter layer " + name.replace(/up|down/g, "") + " now.", "Take Curses first", "Enter now");
+		if (!wantPause && corrDue && crossingCorruptionBlock(portalName)) { // can't pay on arrival: the Curses must come first
+			await uiAlert(crossingCorruptionBlock(portalName) + " Take this layer's Curses first, then click the same portal again.");
+			wantPause = true;
+		};
+		if (wantPause) {
+			character.pendingArrival = {layer: currentLayer, portal: portalName, corrDue: corrDue};
+			note("Crossing paused: Layer " + name.replace(/up|down/g, ""));
 			refreshCrossingUI();
 			return;
 		};
+		if (corrDue && !await payCrossingCorruption(portalName)) return;
 		character.pendingArrival = null;
 		if (name == "11down") { // the ending: the last descent
 			await endGame("L'appel du Vide", "you descend and never return.", vodFollowers);
 			return;
 		};
 		if (portalName == "9down") { // the check happens at the end of the journey: without a way to breathe you stay in layer 8, at the pool
-			if (!await breathingCheck()) { character.atPool = true; note("You stand at the deep pool at the bottom of layer 8 without a way to go on. The journey is done: going down costs nothing more once you have one."); return; }
+			if (!await breathingCheck()) { character.atPool = true; note("Stopped at layer 8 deep pool (no way to go on)"); return; }
 			character.atPool = false;
 		};
 		if (name == "1up" || name == "3down") {
@@ -2192,9 +2615,13 @@ async function takeAction(obj) {
 		character.atPool = false;
 		character.cherryWindow = (character.visitedLayers.indexOf(+name) < 0 && +name >= 1 && +name <= 9) ? {layer: +name, rolls: 0, open: true} : null;
 		if (character.visitedLayers.indexOf(+name) < 0) character.visitedLayers.push(+name);
-		if (portalName == "1up" && !balloonFlight) await checkBandits(); // shop balloons are safeguarded against Bandits
+		if (portalName == "1up" && !balloonFlight && !character.escapeFlight) await checkBandits(); // shop balloons are safeguarded against Bandits
 		if (+name == 0) arriveAtSurface();
-		if (+name == 4 && character.spectreStartDay === null && !character.spectreEnded) { character.spectreStartDay = character.days; note("The Spectre of the End begins following you."); }
+		if (+name == 4 && character.spectreStartDay === null && !character.spectreEnded) { character.spectreStartDay = character.days; postLogNotes.push("Spectre of the End begins"); } // logged after the "-Portal: 4" line
+			if (!balloonFlight && !character.escapeFlight) { // smart auto-foraging: the spots that will be used automatically here (a balloon only passing through checks nothing; see runEscapeFlight for the landing)
+				var autoNames = autoForageNames();
+				if (autoNames.length) postLogNotes.push("Auto-foraging enabled: " + autoNames.join(", "));
+			};
 		// TODO: finish
 	} else if (type == "habitation") {
 		if (character.corruption < 0 || character.loan > 0) {
@@ -2214,12 +2641,15 @@ async function takeAction(obj) {
 		if (laborJobs[name]) { // you say how many days you work and how much you are paid (up to the maximum); tax, food and water still apply
 			var maxPay = laborJobs[name];
 			var helper = laborRelics[name] && hasRelic(laborRelics[name]) ? laborRelics[name] : null;
-				var workDays = parseInt(await uiPrompt(name + ": how many days do you work? (tax, food and water still apply)" + (helper ? " Your " + helper + " can trivialize this job." : ""), helper ? "0" : "1"), 10);
-			if (!(workDays >= 0)) return;
-			var defPay = (name == "Energy Generator") ? Math.min(maxPay, 4*workDays) : 0; // 4 dubloons per kWh, about a day of hard running per kWh
-			var pay = parseInt(await uiPrompt(name + ": how many dubloons were you paid? (maximum " + maxPay + ")", String(defPay)), 10);
-			if (!(pay >= 0)) return;
-			pay = Math.min(pay, maxPay);
+				var jobAns = await uiForm(name + ": tax, food and water still apply." + (helper ? " Your " + helper + " can trivialize this job." : ""), [
+					{key: "days", kind: "number", label: "Days you work", min: 0, step: 1, def: helper ? 0 : 1},
+					{key: "pay", kind: "number", label: "Dubloons you were paid (0 to " + maxPay + "; blank = " + (name == "Energy Generator" ? "4 per day worked" : "0") + ")", min: 0, max: maxPay, step: 1, optional: true}
+				]);
+				if (!jobAns) return;
+				var workDays = Math.floor(jobAns.days);
+				var defPay = (name == "Energy Generator") ? Math.min(maxPay, 4*workDays) : 0; // 4 dubloons per kWh, about a day of hard running per kWh
+				var pay = jobAns.pay === null ? defPay : Math.floor(jobAns.pay);
+				pay = Math.min(pay, maxPay);
 			if (!await timeHandler(workDays, false)) return; // work time is not travel
 			if (!character.dead) gainDoubloons(pay);
 			name += ", " + workDays + " days, " + pay + " dubloons";
@@ -2253,13 +2683,12 @@ async function takeAction(obj) {
 		// Collect and validate all input BEFORE charging any days; cancelling or bad input costs nothing.
 		var applyWonder = null;
 		if (name == "Icon of Mercy") {
-			var curseName = await uiPrompt("Enter a curse (exact case-sensitive name) to remove:");
-			if (curseName === null) return;
-			curseName = curseName.trim();
-			var cursePos = character.curses.indexOf(curseName);
-			if (cursePos < 0) { await uiAlert("You don't have that curse!"); return; }
-			if (WONDER_PROOF.indexOf(curseName) >= 0) { await uiAlert("No Wonder can remove " + curseName + "."); return; }
-			var lastCopy = character.curses.filter(function(x) { return x == curseName; }).length == 1;
+			var mercyList = byName(character.curses.filter(function(c) { return WONDER_PROOF.indexOf(c) < 0; }));
+			if (!mercyList.length) { await uiAlert(character.curses.length ? "No Wonder can remove the Curses you have." : "You have no Curse to remove!"); return; }
+			var mercyAns = await uiForm("Icon of Mercy: which Curse do you want removed?", [{key: "curse", kind: "select", label: "Curse", options: mercyList}]);
+			if (!mercyAns) return;
+			var curseName = mercyAns.curse;
+			var lastCopy = curseLevel(curseName) == 1;
 			var zeroed = isAssetCurse(curseName) && character.nullZeroed.indexOf(curseName) >= 0; // Null had cancelled its points
 			var restore = curseName == "Null" ? character.nullZeroed.reduce(function(a, n) { return a + curses[n]; }, 0) : 0; // removing Null brings those points back
 			var refund = zeroed ? 0 : curseBase(curseName, lastCopy ? 0 : 1) + (lastCopy ? (character.curseBonuses[curseName] || 0) : 0); // Fluffy Tail: only the last remaining copy refunds its points
@@ -2269,7 +2698,7 @@ async function takeAction(obj) {
 			};
 			applyWonder = async function() {
 				await corruptionHandler(refund, true); // refund the curse's corruption points (and its optional bonus with the last copy)
-				name += ", " + character.curses.splice(cursePos, 1);
+				name += ", " + curseName; removeCurseCopy(curseName);
 				if (curseName == "Ampu-Q-tie") { character.ampuLimbs.pop(); await resolveGrasp(); } // the limb comes back
 				if (zeroed) character.nullZeroed.splice(character.nullZeroed.indexOf(curseName), 1);
 				if (curseName == "Null") nullRemoved();
@@ -2282,7 +2711,15 @@ async function takeAction(obj) {
 			if (character.companions.length < 1) { await uiAlert("Fate-crossing Star needs at least one companion!"); return; }
 			applyWonder = function() { character.corruption += 70; };
 		} else if (name == "Gossamery Scales") {
-			var chooseCorruption = character.corruption < 0 || !await uiConfirm("Press OK to receive doubloons from corruption, or Cancel to receive corruption from doubloons");
+			var chooseCorruption = true;
+			if (character.corruption >= 0) { // below zero only the corruption-from-doubloons direction works
+				var gsAns = await uiForm("Gossamery Scales: which way do you trade?", [{key: "dir", kind: "radio", options: [
+					{value: "doubloons", label: "Receive doubloons from corruption"},
+					{value: "corruption", label: "Receive corruption from doubloons"}
+				]}]);
+				if (!gsAns) return;
+				chooseCorruption = gsAns.dir == "corruption";
+			};
 			applyWonder = function() {
 				if (chooseCorruption) character.corruption += Math.ceil(character.doubloons/5)
 				else gainDoubloons(Math.ceil(character.corruption/5));
@@ -2290,22 +2727,25 @@ async function takeAction(obj) {
 			};
 		} else if (name == "Skewed Shrine" || name == "Steady Shrine") {
 			var isSkewed = (name == "Skewed Shrine");
-			var pair = await parseCurseTarget(await uiPrompt(isSkewed ? "Enter a curse and a companion to transfer it to, e.g. \"20/20000000 -> Saeko\" (without quotes)" : "Enter a curse and a companion to copy it to, e.g. \"Cross(dress) Your Heart -> Maru\" (without quotes)"));
-			if (!pair) return;
-			var shrineCurse = pair[0], shrineCompanion = pair[1];
-			var shrineCursePos = character.curses.indexOf(shrineCurse);
-			if (shrineCursePos < 0) { await uiAlert("You don't have that curse!"); return; }
-			if (WONDER_PROOF.indexOf(shrineCurse) >= 0) { await uiAlert("No Wonder can " + (isSkewed ? "transfer " : "copy ") + shrineCurse + "."); return; }
-			if (!has("companions", shrineCompanion)) { await uiAlert("That companion isn't travelling with you!"); return; }
-			if (!isSkewed && has("copiedCurses", shrineCurse)) { await uiAlert("That curse has already been copied!"); return; }
+			var shrineList = byName(character.curses.filter(function(c) { return WONDER_PROOF.indexOf(c) < 0 && (isSkewed || !has("copiedCurses", c)); }));
+			if (!shrineList.length) { await uiAlert(character.curses.length ? "No Curse you have can be " + (isSkewed ? "transferred" : "copied") + " (Wonders can't touch Double Trouble or Conjoined" + (isSkewed ? "" : ", and a Curse can only be copied once") + ")." : "You have no Curse to " + (isSkewed ? "transfer" : "copy") + "!"); return; }
+			if (!character.companions.length) { await uiAlert("You have no companion travelling with you to " + (isSkewed ? "take the Curse" : "receive the copy") + "."); return; }
 			var tribute = 5*character.shrineTributes; // shared by both shrines: 0, 5, 10, 15...
+			var tributeText = tribute > 0 ? "Tribute for this use: " + tribute + " doubloons (it grows by 5 with every use of either shrine)." : "Tribute for this use: none (the first use of either shrine is free; every later use costs 5 more doubloons than the one before).";
+			var shrineAns = await uiForm((isSkewed ? "Skewed Shrine: transfer a Curse to a companion." : "Steady Shrine: copy a Curse to a companion.") + "\n" + tributeText + (isSkewed ? " The Curse's corruption points are not refunded." : " The copy adds half the Curse's corruption points (rounded up), shown beside each Curse."), [[
+				{key: "curse", kind: "select", label: "Curse", options: isSkewed ? shrineList : shrineList.map(function(c) { return {value: c, label: c + " (+" + Math.ceil(curses[c]/2) + " corruption)"}; })},
+				"→",
+				{key: "companion", kind: "radio", label: isSkewed ? "Transfer to" : "Copy to", options: character.companions.slice()}
+			]]);
+			if (!shrineAns) return;
+			var shrineCurse = shrineAns.curse, shrineCompanion = shrineAns.companion;
 			if (tribute > 0 && barterBlocked()) { await uiAlert("Barter System: your dubloons are unusable without a companion."); return; }
 			if (tribute > character.doubloons) { await uiAlert("Insufficient doubloons for the tribute (" + tribute + ")!"); return; }
 			applyWonder = async function() {
 				await doubloonHandler(tribute, 0);
 				character.shrineTributes += 1;
 				if (isSkewed) {
-					character.curses.splice(shrineCursePos, 1);
+					removeCurseCopy(shrineCurse);
 					if (isAssetCurse(shrineCurse) && character.nullZeroed.indexOf(shrineCurse) >= 0) character.nullZeroed.splice(character.nullZeroed.indexOf(shrineCurse), 1);
 					if (shrineCurse == "Null") nullRemoved();
 					if (shrineCurse == "Ampu-Q-tie") { character.ampuLimbs.pop(); await resolveGrasp(); } // the limb comes back (the companion bears the Curse)
@@ -2317,10 +2757,10 @@ async function takeAction(obj) {
 				name += ", " + shrineCurse + " -> " + shrineCompanion;
 			};
 		} else if (name == "Recycling Centers") { // Recycling centers considered sufficiently distinct from Outset Town shop that loan stipulation (i.e. sold relics pay off loan first) does not apply
-			var relicName = await uiPrompt("Enter a relic (exact case-sensitive name) to recycle");
-			if (relicName === null) return;
-			relicName = relicName.trim();
-			if (!has("relics", relicName)) { await uiAlert("You don't have that relic!"); return; }
+			if (!character.relics.length) { await uiAlert("You have no Relic to recycle!"); return; }
+			var recycleAns = await uiForm("Recycling Centers: which Relic do you want to recycle?", [{key: "relic", kind: "select", label: "Relic", options: byName(character.relics)}]);
+			if (!recycleAns) return;
+			var relicName = recycleAns.relic;
 			applyWonder = function() {
 				removeRelic(relicName);
 				var v = relicValue(relicName);
@@ -2332,17 +2772,20 @@ async function takeAction(obj) {
 		} else if (name == "One-sided Tunnel") { // the 2 days are the trip there; walking through takes 1 more day and activates the Pocket Hoard
 			applyWonder = async function() {
 				await timeHandler(1, false);
-				if (has("relics", "Pocket Hoard")) { character.hoardActive = true; note("Pocket Hoard activated: infinite carrying capacity."); }
+				if (has("relics", "Pocket Hoard")) { character.hoardActive = true; note("Pocket Hoard activated"); }
 				teleportToSurface();
 			};
 		} else if (name == "Clockwork Forge") { // 2 days of travel and 4 dubloons per use: swaps the abilities of two Relics (shape constraints ignored, per your ruling)
-			var forgePair = await parseCurseTarget(await uiPrompt("Swap the abilities of which two Relics? e.g. \"Sunbeam -> Moonwatcher\" (without quotes)"));
-			if (!forgePair) return;
-			var fa = forgePair[0], fb = forgePair[1];
-			if (fa == fb) { await uiAlert("Choose two different Relics."); return; }
-			if (!has("relics", fa) || !has("relics", fb)) { await uiAlert("You don't have both of those Relics!"); return; }
-			if (fa == "Perpetual Repose" || fb == "Perpetual Repose") { await uiAlert("Perpetual Repose can't be swapped."); return; }
+			var forgeList = byName(character.relics.filter(function(r) { return r != "Perpetual Repose"; })); // Perpetual Repose can't be swapped
+			if (forgeList.length < 2) { await uiAlert("The Forge needs two different Relics you can swap (Perpetual Repose can't be)."); return; }
 			if (character.doubloons < 4 || barterBlocked()) { await uiAlert("The Forge costs 4 dubloons per use."); return; }
+			var forgeAns = await uiForm("Clockwork Forge: swap the abilities of two Relics.", [[
+				{key: "a", kind: "select", label: "First Relic", options: forgeList},
+				"↔",
+				{key: "b", kind: "select", label: "Second Relic", options: forgeList}
+			]], function(v) { return v.a === v.b ? "Choose two different Relics." : ""; });
+			if (!forgeAns) return;
+			var fa = forgeAns.a, fb = forgeAns.b;
 			applyWonder = async function() {
 				await doubloonHandler(4, 0);
 				var a = {w : relicWeight(fa), v : relicValue(fa)}, b = {w : relicWeight(fb), v : relicValue(fb)};
@@ -2362,7 +2805,7 @@ async function takeAction(obj) {
 				if (character.vaultState == "none") {
 					character.vaultState = "armed";
 					character.vaultStart = character.days;
-					note("Mirage Vault: the 60-day countdown starts. Come back between day " + (character.days + 60) + " and day " + (character.days + 65) + ".");
+					note("Mirage Vault: collect days " + (character.days + 60) + "-" + (character.days + 65));
 					if (vWho) leaveCompanionAtVault(vWho);
 					return;
 				};
@@ -2373,21 +2816,21 @@ async function takeAction(obj) {
 					joinCompanion(who);
 					character.vaultAway = null;
 					character.vaultState = "collected";
-					note("Mirage Vault: " + who + " hands over 200 dubloons, 9 days of food and water and 3 medkits, and rejoins you.");
+					note("Mirage Vault: collected 200 dubloons, 9d food/water, 3 medkits; " + who + " rejoins");
 					return;
 				};
 				if (t <= 65) {
-					if (!await fits(vaultHaulWeight())) { note("You cannot carry everything from the vault: free up room and come back before day " + (character.vaultStart + 65) + "."); return; }
+					if (!await fits(vaultHaulWeight())) { note("Mirage Vault: too heavy, return before day " + (character.vaultStart + 65)); return; }
 					giveVaultHaul();
 					character.vaultState = "collected";
-					note("Mirage Vault: you collect 200 dubloons, 9 days of food and water and 3 medkits.");
-				} else { character.vaultState = "gone"; note("The vault's door and panel have vanished."); }
+					note("Mirage Vault: collected 200 dubloons, 9d food/water, 3 medkits");
+				} else { character.vaultState = "gone"; note("Mirage Vault door vanished"); }
 			};
 		} else if (name == "Purity Tree") { // 5 days of travel per visit; each of the 4 sections is its own choice
 			if (character.purityBurned || character.purityLeft <= 0) { await uiAlert("The Purity Tree is gone."); return; }
 			applyWonder = async function() {
 				if (!hasCutter()) {
-					if (await uiConfirm("You have no cutting tool. Burn the whole tree for +20 corruption? (Cancel to leave)")) { character.corruption += 20; character.purityBurned = true; name += ", burned"; }
+					if (await uiConfirm("You have no cutting tool. Burn the whole tree for +20 corruption?", "Burn it", "Leave")) { character.corruption += 20; character.purityBurned = true; name += ", burned"; }
 					return;
 				};
 				while (character.purityLeft > 0 && !character.dead) {
@@ -2395,28 +2838,27 @@ async function takeAction(obj) {
 					if (k < 0) break;
 					if (k > 0 && !await fits(1.5)) continue; // too heavy to carry the section
 					character.purityLeft -= 1;
+					note("Purity Tree: cut a section (" + (k == 0 ? "crude gear now" : (k == 1 ? "for the Relic Workshop" : "to sell")) + ", " + character.purityLeft + " left)");
 					if (k == 0) { character.corruption += 15; await timeHandler(1, false); }
 					else { character.purityWood[k == 1 ? "workshop" : "sale"] += 1; character.itemWeight += 1.5; }
 				};
 			};
 		} else if (name == "Maw of Kimaris") { // relics from the Maw have no time cost beyond the trip to the Maw itself
 			if (character.purity) { await uiAlert(SEED_NO_RELICS); return; }
-			var toss = parseInt(await uiPrompt("Toss how many dubloons? 10 = take a skipped Relic from a visited layer (1.5x corruption), 20 = duplicate a Relic you own (2x corruption). (5 = retrieve a left-behind item: not supported yet)"), 10);
-			if (toss == 5) { await uiAlert("Retrieving left-behind items isn't supported yet."); return; }
-			if (toss != 10 && toss != 20) return;
-			if (toss > 0 && barterBlocked()) { await uiAlert("Barter System: your dubloons are unusable without a companion."); return; }
-			if (toss > character.doubloons) { await uiAlert("Insufficient doubloons!"); return; }
-			var mawRelic = await uiPrompt(toss == 10 ? "Enter a Relic you haven't taken, from a layer you've visited:" : "Enter a Relic you own to duplicate:");
-			if (mawRelic === null) return;
-			mawRelic = mawRelic.trim();
-			if (!relics[mawRelic]) { await uiAlert("Unknown Relic!"); return; }
-			if (toss == 10) {
-				if (hasRelic(mawRelic)) { await uiAlert("You already took that Relic!"); return; }
-				if (!character.visitedLayers.some(function(L) { return overlays[L].some(function(o) { return o[0] == "relic:" + mawRelic; }); })) { await uiAlert("That Relic isn't in a layer you've visited!"); return; }
-			} else {
-				if (!has("relics", mawRelic)) { await uiAlert("You don't have that Relic!"); return; }
-				if (mawRelic == "Kin Shifter") { await uiAlert("The Maw won't spit out another Kin Shifter."); return; }
-			};
+			if (barterBlocked()) { await uiAlert("Barter System: your dubloons are unusable without a companion."); return; }
+			var skipped = [];
+			character.visitedLayers.forEach(function(L) { overlays[L].forEach(function(o) { if (typeof o[0] == "string" && o[0].indexOf("relic:") == 0) { var rn = o[0].substring(6); if (relics[rn] && !hasRelic(rn) && skipped.indexOf(rn) < 0) skipped.push(rn); } }); });
+			var dupable = character.relics.filter(function(x) { return x != "Kin Shifter"; }); // the Maw won't spit out another Kin Shifter
+			var mawAns = await uiForm("Maw of Kimaris: toss in dubloons (you have " + character.doubloons + "). Retrieving a left-behind item (5 dubloons) isn't supported yet.", [
+				{key: "toss", kind: "radio", label: "Toss", options: [
+					{value: 10, label: "10 dubloons: take a skipped Relic from a visited layer", desc: "1.5x corruption"},
+					{value: 20, label: "20 dubloons: duplicate a Relic you own", desc: "2x corruption"}
+				].filter(function(o) { return o.value <= character.doubloons; })},
+				{key: "skipped", kind: "select", label: "Skipped Relic (for 10)", options: relicOptions(skipped), optional: true},
+				{key: "dup", kind: "select", label: "Relic to duplicate (for 20)", options: relicOptions(dupable), optional: true}
+			], function(v) { return v.toss == 10 ? (v.skipped ? "" : "Choose a skipped Relic.") : (v.dup ? "" : "Choose a Relic to duplicate."); });
+			if (!mawAns) return;
+			var toss = mawAns.toss, mawRelic = toss == 10 ? mawAns.skipped : mawAns.dup;
 			if (!await fits(relicWeight(mawRelic))) return;
 			var mawCost = Math.max(10, (toss == 10 ? Math.floor(1.5*relics[mawRelic][0]) : 2*relics[mawRelic][0]) - corruptSave());
 			if (wonders["Empty-handed Broker"][1] > 0 && mawCost + 5*flameLevel() > character.corruption) { await uiAlert("Corruption cannot become negative after visiting Empty-handed Broker!"); return; }
@@ -2431,17 +2873,16 @@ async function takeAction(obj) {
 		if (name == "Fountain of Youth") { // a water source: fill your flasks (the first day drunk stops your aging, later ones carry the Lethe Taps effect)
 			applyWonder = async function() { await fillFlasksFrom("Fountain of Youth"); };
 		} else if (name == "Bloodstained Sanctuary") { // 6 days, once: a human killed on the altar gives +200 corruption
-			var bsIn = (await uiPrompt("Bloodstained Sanctuary: whom do you kill on the altar? (+200 corruption, once only)\nType: obol (yourself, with the unused Phoenix Obol; it is used up), a companion's name, bandit (an Opportunistic Bandit you captured) or twin (your Double Trouble twin)") || "").trim().toLowerCase();
-			if (!bsIn) return;
-			var bsKind = null, victim = null;
-			if (bsIn == "obol") { if (!(hasRelic("Phoenix Obol") && !character.obolUsed)) { await uiAlert("You need an unused Phoenix Obol."); return; } bsKind = "obol"; }
-			else if (bsIn == "bandit") { if (character.captives < 1) { await uiAlert("You haven't captured an Opportunistic Bandit."); return; } bsKind = "bandit"; }
-			else if (bsIn == "twin") { if (!hasTwin()) { await uiAlert("You have no twin."); return; } bsKind = "twin"; }
-			else {
-				victim = character.companions.filter(function(n) { return n.toLowerCase() == bsIn; })[0];
-				if (!victim) { await uiAlert("That is not one of your companions (or obol, bandit or twin)!"); return; }
-				bsKind = "companion";
-			};
+			var bsOpts = [];
+			if (hasRelic("Phoenix Obol") && !character.obolUsed) bsOpts.push({value: "obol", label: "Yourself", desc: "With the unused Phoenix Obol; it is used up."});
+			character.companions.forEach(function(c) { bsOpts.push({value: "c:" + c, label: c, desc: "A companion."}); });
+			if (character.captives >= 1) bsOpts.push({value: "bandit", label: "A captured Opportunistic Bandit"});
+			if (hasTwin()) bsOpts.push({value: "twin", label: "Your Double Trouble twin"});
+			if (!bsOpts.length) { await uiAlert("You have nobody to kill on the altar (no unused Phoenix Obol, companion, captured bandit or twin)."); return; }
+			var bsAns = await uiForm("Bloodstained Sanctuary: whom do you kill on the altar? (+200 corruption, once only)", [{key: "who", kind: "radio", options: bsOpts}]);
+			if (!bsAns) return;
+			var bsIn = bsAns.who, bsKind = null, victim = null;
+			if (bsIn.indexOf("c:") == 0) { victim = bsIn.substring(2); bsKind = "companion"; } else bsKind = bsIn;
 			applyWonder = function() {
 				if (bsKind == "obol") character.obolUsed = true;
 				else if (bsKind == "companion") removeCompanion(victim);
@@ -2452,15 +2893,16 @@ async function takeAction(obj) {
 			};
 		} else if (name == "Boundless Space" || name == "Endless Time") { // 15 days, once ever: one Relic only; a Relic can't hold both boosts; it doesn't pass to copies
 			var boundless = (name == "Boundless Space"), other = boundless ? character.endless : character.boundless;
-			var br = (await uiPrompt(boundless ? "Boundless Space: which Relic with a listed range in meters? (the game doesn't track ranges: only choose one that has one)" : "Endless Time: which Relic with a listed time? (the game doesn't track times: only choose one that has one)") || "").trim();
-			if (!br) return;
-			if (!has("relics", br)) { await uiAlert("You don't have that Relic!"); return; }
-			if (other && other.relic == br) { await uiAlert("One Relic can't hold both Boundless Space and Endless Time boosts."); return; }
-			var bv = Number(await uiPrompt(boundless ? "Set its range to how many times its default? (1 to 100)" : "Set its time to what percent of its default? (1 to 100)"));
-			if (!(bv >= 1 && bv <= 100)) { await uiAlert("Enter a number from 1 to 100."); return; }
+			var bList = character.relics.filter(function(x) { return !(other && other.relic == x); }); // one Relic can't hold both boosts
+			if (!bList.length) { await uiAlert(character.relics.length ? "One Relic can't hold both Boundless Space and Endless Time boosts." : "You have no Relic to boost!"); return; }
+			var bAns = await uiForm(boundless ? "Boundless Space: choose a Relic with a listed range in meters (the game doesn't track ranges: only choose one that has one)." : "Endless Time: choose a Relic with a listed time (the game doesn't track times: only choose one that has one).", [
+				{key: "relic", kind: "select", label: "Relic", options: relicOptions(bList)}
+			]);
+			if (!bAns) return;
+			var br = bAns.relic;
 			applyWonder = function() {
-				if (boundless) character.boundless = {relic: br, x: bv}; else character.endless = {relic: br, pct: bv};
-				name += ", " + br + (boundless ? " range x" + bv : " time " + bv + "%");
+				if (boundless) character.boundless = {relic: br}; else character.endless = {relic: br};
+				name += ", " + br;
 			};
 		};
 		if (!await timeHandler(w[0], true)) return;
@@ -2468,10 +2910,10 @@ async function takeAction(obj) {
 		// TODO: finish
 		w[1] += 1;
 	} else if (type == "convert") { // "Money!": a conversion, not a shop item ($100 per dubloon)
-		var amt = await uiPrompt("Convert how many dubloons to money? ($100 per dubloon; you have " + character.doubloons + ")", character.doubloons);
-		if (amt === null) return;
-		amt = Number(amt);
-		if (!Number.isInteger(amt) || amt < 1 || amt > character.doubloons) { await uiAlert("Enter a whole number of dubloons from 1 to " + character.doubloons + "."); return; }
+		if (character.doubloons < 1) { await uiAlert("You have no dubloons to convert."); return; }
+		var cvAns = await uiForm("Convert how many dubloons to money? ($100 per dubloon; you have " + character.doubloons + ")", [{key: "n", kind: "number", label: "Dubloons (1 to " + character.doubloons + ")", min: 1, max: character.doubloons, step: 1, def: character.doubloons}]);
+		if (!cvAns) return;
+		var amt = Math.floor(cvAns.n);
 		character.doubloons -= amt;
 		character.money += 100*amt;
 		name += ", " + amt + " doubloons for $" + (100*amt);
@@ -2482,6 +2924,7 @@ async function takeAction(obj) {
 		if (name == "Maximum Fluff" && clash == "Hair Removal") { // may override Hair Removal: lose its points, remove it
 			character.corruption -= curses["Hair Removal"];
 			character.curses.splice(character.curses.indexOf("Hair Removal"), 1);
+			note("Maximum Fluff replaces Hair Removal (its points are lost)");
 			clash = null;
 		};
 		if (clash) { await uiAlert(name + " conflicts with " + clash + "!"); return; }
@@ -2491,7 +2934,7 @@ async function takeAction(obj) {
 		if (name == "Conjoined" && !character.companions.length && !hasTwin()) { await uiAlert("Conjoined needs a hired companion or your twin to be conjoined to!"); return; }
 		if (has("curses", name)) {
 			if (!cursesMultiple[name]) return;
-			if (character.curses.filter(c => c == name).length >= cursesMultiple[name]) return;
+			if (curseLevel(name) >= cursesMultiple[name]) return;
 		}
 		var form = null;
 		if (name == "Literalization") { // only once you hold every prerequisite Curse of one form
@@ -2508,8 +2951,8 @@ async function takeAction(obj) {
 			if (hasTwin()) opts.push("twin");
 			if (opts.length == 1) conjTo = opts[0];
 			else {
-				var cAns = (await uiPrompt("Conjoined: whom are you conjoined to? Type one of: " + opts.join(", ") + ". A companion's bonuses are negated while you are conjoined to them." + (cherryCtx ? forcedNote(opts[0]) : "")) || "").trim().toLowerCase();
-				conjTo = opts.filter(function(o) { return o.toLowerCase() == cAns; })[0] || (cherryCtx ? opts[0] : null);
+				var cAns = await uiForm("Conjoined: whom are you conjoined to? A companion's bonuses are negated while you are conjoined to them." + (cherryCtx ? "\n\nCherry's luck forces this Curse on you, so a choice has to be made." : ""), [{key: "who", kind: "radio", options: opts.map(function(o) { return {value: o, label: o == "twin" ? "Your twin" : o}; }), def: cherryCtx ? opts[0] : undefined}], null, cherryCtx);
+				conjTo = cAns ? cAns.who : (cherryCtx ? opts[0] : null);
 				if (!conjTo) return;
 			};
 		};
@@ -2521,27 +2964,27 @@ async function takeAction(obj) {
 			if (il.arm + il.leg < 1) { await uiAlert("You have no intact organic limb left for Ampu-Q-tie to take!"); return; }
 			if (il.arm && il.leg) {
 				{
-					var ans = (await uiPrompt("Ampu-Q-tie takes one limb (intact organic limbs only). You have " + il.arm + " arm(s) and " + il.leg + " leg(s) left. Type arm or leg:" + (cherryCtx ? forcedNote("arm") : "")) || "").trim().toLowerCase();
-					if (ans != "arm" && ans != "leg") { if (!cherryCtx) return; ans = "arm"; }
+					var aAns = await uiForm("Ampu-Q-tie takes one limb (intact organic limbs only)." + (cherryCtx ? "\n\nCherry's luck forces this Curse on you, so a choice has to be made." : ""), [{key: "limb", kind: "radio", options: [{value: "arm", label: "An arm", desc: il.arm + " intact"}, {value: "leg", label: "A leg", desc: il.leg + " intact"}], def: cherryCtx ? "arm" : undefined}], null, cherryCtx);
+					if (!aAns) return;
+					var ans = aAns.limb;
 					ampuKind = ans;
 				};
 			} else ampuKind = il.arm ? "arm" : "leg";
 		};
 		var extra = 0, cb = curseBonuses[name];
-		if (cb && !character.curseBonuses[name] && !(cb.blocked && cb.blocked()) && await uiConfirm(cb.ask + " (OK = yes, Cancel = no)")) { extra = cb.bonus; character.curseBonuses[name] = cb.bonus; }
+		if (cb && !character.curseBonuses[name] && !(cb.blocked && cb.blocked()) && await uiConfirm(cb.ask, "Yes", "No")) { extra = cb.bonus; character.curseBonuses[name] = cb.bonus; }
 		if (name == "Seafolk" && extra && currentLayer != 9 && !character.airPlan && !await askAirPlan("you keep your lungs as they are (no bonus)")) { extra = 0; delete character.curseBonuses[name]; } // taking it in an air layer needs the plan at once
-		var cbase = curseBase(name, character.curses.filter(function(x) { return x == name; }).length);
+		var cbase = curseBase(name, curseLevel(name));
 		var nullFree = isAssetCurse(name) && has("curses", "Null"); // its effects are negated, so it carries no points
 		if (nullFree) cbase = 0;
 		character.corruption += (cherryCtx ? Math.ceil(1.5*cbase) : cbase) + extra; // Cherry: 1.5x (rounded up), the optional bonus is added after
-		character.curses.push(name);
+		addCurseCopy(name);
 		if (nullFree) character.nullZeroed.push(name);
-		if (heightPick) note("Dizzying Heights: you grow " + heightPick + " (every height change from now on goes the same way).");
-		if (conjTo) { character.conjoinedTo = conjTo; note("You are conjoined to " + (conjTo == "twin" ? "your twin." : conjTo + ": their bonuses are negated.")); }
+				if (conjTo) { character.conjoinedTo = conjTo; note("Conjoined to " + (conjTo == "twin" ? "twin" : conjTo + " (bonuses negated)")); }
 		if (name == "Null") nullTaken();
-		if (ampuKind) { character.ampuLimbs.push(ampuKind); note("Ampu-Q-tie takes one of your " + ampuKind + "s."); await resolveGrasp(); }
+		if (ampuKind) { character.ampuLimbs.push(ampuKind); note("Ampu-Q-tie: " + ampuKind); await resolveGrasp(); }
 		if (name == "Double Trouble") character.twin = true;
-		if (form) { character.literalForm = form; note("Literalization: you become a " + form + ", and all your other Curses now apply to that form."); }
+		if (form) { character.literalForm = form; note("Literalization: " + form); }
 		if (name == "Below the Veil") dropCompanionsForVeil();
 	} else if (type == "relic") {
 		if (character.purity) { await uiAlert(SEED_NO_RELICS); return; }
@@ -2563,13 +3006,14 @@ async function takeAction(obj) {
 			} else if (name == "Timekeeper's Keepsake") { if (!has("items", "Rope")) return; }
 			else if (name == "Moonwatcher") { lightPlan = await planLight(true, estDays); if (!lightPlan) return; }
 			else if (name == "Twin Polaris") { if ((60*character.companions.length + totalWeight() < 90)) return; }
-			else if (name == "Empath Coil") { if (!await ammoHandler(1)) return; }
+			else if (name == "Empath Coil") { if (!await ammoHandler(1)) return; note("Empath Coil: 1 bullet spent"); }
 			else if (name == "Out of Mind") { if (!has("items", "Rope") && !has("relics", "Sunbeam")) return; }
 			else if (name == "Forbidden Grimoire") { if (!has("items", "Scuba Gear")) return; }
 			else if (name == "Blind Divine") {
 				if (character.ammo < 4) return;
 				if (character.ammo % 6 != 5 && character.ammo % 6 != 0) character.itemWeight -= 0.2;
 				character.ammo -= 4;
+				note("Blind Divine: 4 bullets spent");
 			} else if (name == "Phoenix Obol") { lightPlan = await planLight(true, estDays); if (!lightPlan) return; }
 			else if (name == "Granted Granite") { if ((60*character.companions.length + totalWeight() < 200)) return; }
 			else if (name == "Absolute Oracle") { lightPlan = await planLight(true, estDays); if (!lightPlan) return; } // Moonwatcher is not enough
@@ -2589,7 +3033,7 @@ async function takeAction(obj) {
 		if (has("companions", name)) return;
 		if (maxStock[name]) { if (character.items.filter(x => x == name).length >= maxStock[name]) return; }
 		else if (!(canBuyMultiple.indexOf(name) + 1) && has("items", name)) return;
-		if (name.search(/Maru|Lily|Khemia|Cherry|Cloud|Saeko/) < 0 && !await fits(items[name][1])) return;
+		if (name.search(/Maru|Lily|Khemia|Cherry|Cloud|Saeko/) < 0 && !await fits(items[name][1] + (name == "Flask (vending)" ? 0.8 : 0))) return;
 		if (!await doubloonHandler(items[name][0], 1)) return;
 		if (name == "Khemia") { character.travelTimeSave += 2; }
 		else if (name == "Saeko") { character.corruptionSave += 5; }
@@ -2612,12 +3056,8 @@ async function takeAction(obj) {
 			else if (name.search("Water") == 0) { character.water[0] += 1; }
 			else if (name.search("Flask") == 0) { 
 				character.flasks += 1;
-				if (name.search("vending") + 1) {
-					if (await fits(0.8) && await uiConfirm("Fill flask for 1 doubloon?") && await doubloonHandler(1, 1)) {
-						character.water[1] += 1;
-						character.itemWeight += 0.8;
-					};
-				} else character.water[1] += 1;
+				character.water[1] += 1; // the flask comes filled (the vending machine's right click refills an empty one for 1 doubloon)
+				if (name.search("vending") + 1) character.itemWeight += 0.8; // the vending flask's price list weight is the empty flask
 			} else if (name == "Ward Water") { character.water[2] += 1; }
 			else character.items.push(name);
 		};
@@ -2626,7 +3066,12 @@ async function takeAction(obj) {
 	await lifespannerHeal(); // e.g. just after taking the Lifespanner
 	if (type != "curse" && type != "portal") character.atPool = false; // any action besides taking a Curse means you've left the pool
 	if (type != "portal" && !cherryCtx && character.cherryWindow) character.cherryWindow.open = false; // any other option ends Cherry's first-visit window
-	get('log').value += "-" + type[0].toUpperCase() + type.slice(1) + ": " + name + "\n";
+	if (!quietItemLog) get('log').value += "-" + type[0].toUpperCase() + type.slice(1) + ": " + name + ((type == "curse" && heightPick) ? ", " + heightPick : "") + "\n";
+	while (postLogNotes.length) note(postLogNotes.shift());
+	if (continueFlight && character.escapeFlight && !character.dead && !character.ended) { // the paused Escape Balloon hop has arrived: the flight goes on
+		var fr = await runEscapeFlight(true);
+		if (fr) note(fr.replace(/^Item: /, ""));
+	}
 	get('log').scrollTop = get('log').scrollHeight - get('log').clientHeight - 14;
 	updateInfo();
 }
@@ -2641,6 +3086,7 @@ function refreshMenu() { // the Actions menu only lists what can apply right now
 	if (usableRelics().length > 0) list.push(["relic", "Use relic"]);
 	if (currentLayer == 0 && character.relics.length > 0) list.push(["sell", "Sell relic"]);
 	if (has("companions", "Cherry")) list.push(["cherry", "Cherry's luck"]);
+	if (character.water[2] >= 1 && character.jinxedFlame > 0) list.push(["ward", "Drink Ward Water"]);
 	if (!navJumpOnly) list.push(["override", "Override"]); // dev mode only (Alt+S)
 	if (undoStack.length > 0) list.push(["undo", "Undo last action"]); // only with a non-empty undo history
 	if (stateChanged()) list.push(["export", "Export game"]); // nothing to export while the game is still in its initial state
@@ -2675,7 +3121,9 @@ function updateInfo() {
 	get('status').innerHTML = statusStr;
 	get('companions').innerHTML = (character.companions.length ? character.companions.map(function(c) { return c + (c == character.conjoinedTo ? " (conjoined)" : ""); }).join(", ") : "none") + (hasTwin() ? " (+ your twin)" : "");
 	var limit = character.hoardActive ? "&infin;" : carryLimit();
-	var multiItemStr = "Items (weight: " + totalWeight().toFixed(1) + "/" + limit + " kg):", count = 0;
+	var wStr = totalWeight().toFixed(1) + "/" + limit;
+	if (!character.hoardActive && totalWeight() > carryLimit() + 1e-9) wStr = '<span style="color:red" title="Over capacity (hard limit ' + hardLimit() + ' kg)">' + wStr + '</span>';
+	var multiItemStr = "Items (weight: " + wStr + " kg):", count = 0;
 	for (var i=3;i<=7;i++) {
 		count = character.items.filter(name => name == canBuyMultiple[i]).length;
 		if (count > 0) multiItemStr += "<br>- " + canBuyMultiple[i] + " (x" + count + ")";
@@ -2696,7 +3144,7 @@ function updateInfo() {
 	var lv = curseLevels(), lvKeys = Object.keys(lv);
 	var lvHtml = lvKeys.length ? "<br>Curse levels:" + lvKeys.map(function(f) { return "<br>- " + f + ": level " + (lv[f].taken + lv[f].foraged) + (lv[f].foraged ? " (" + lv[f].taken + " taken, " + lv[f].foraged + " foraged)" : ""); }).join("") : "";
 	var fxHtml = fxKeys.length ? "<br>Foraging effects:" + fxKeys.map(function(k) { return "<br>- " + k + " (x" + character.effects[k] + ")"; }).join("") : "";
-	get('curses').innerHTML = formatArray(character.curses.filter(function(n, i, a) { return n != "Dizzying Heights" || a.indexOf(n) == i; }).concat(character.conferred.map(function(c) { return c + " (conferred)"; })), "Curses:", true) + lvHtml + fxHtml;
+	get('curses').innerHTML = formatArray(character.curses.concat(character.conferred.map(function(c) { return c + " (conferred)"; })), "Curses:", true) + lvHtml + fxHtml;
 }
 function format0(num, text) {
 	return num ? text + num : "";
@@ -2721,8 +3169,8 @@ function gotoPage(n) {
 function refreshCrossingUI() { renderOverlay(currentLayer); }
 var WONDER_PROOF = ["Double Trouble", "Conjoined"]; // no Wonder can remove, transfer or copy these
 var BARTER_REASON = "Barter System: your dubloons are unusable without a companion.";
-function canFit(extra) { return !(extra > 0 && totalWeight() + extra > carryLimit() + 1e-9); } // fits() without the alert
-function tooHeavy(extra) { return "Too heavy to carry (" + (totalWeight() + extra).toFixed(1) + " of " + carryLimit() + " kg)."; }
+function canFit(extra) { return !(extra > 0 && totalWeight() + extra > hardLimit() + 1e-9); } // fits() without the alert
+function tooHeavy(extra) { return "Too heavy to carry (" + (totalWeight() + extra).toFixed(1) + " kg; the limit is " + hardLimit() + " kg)."; }
 function lightOK(strong, tripDays) { // planLight() without prompts: could you meet a light requirement right now?
 	if (currentLayer == 9) return waterproofLight();
 	return !!(character.hasStrongLight || (!strong && character.hasLight) || torchCovers(tripDays) || has("items", "Torch"));
@@ -2749,15 +3197,16 @@ function refusalReason(id, n) { // null if clicking the hotspot would do somethi
 	};
 	var k, c;
 	if (type == "portal") {
-		if (continuing) return null;
+		if (continuing) return pa.corrDue ? crossingCorruptionBlock(name) : null; // the corruption is charged on arrival
 		if (character.purity && /down$/.test(name)) return SEED_NO_DESCENT;
-		if (name == "0up") {
+		var willPause = overlays[currentLayer].some(function(o) { return o[0].indexOf("curse:") == 0; }); // then the corruption is charged after the Curses
+		if (name == "0up" && !willPause) {
 			var sc = seedFreeAscent("0up") ? 0 : Math.max(0, portals["0up"][1] - corruptSave() + 5*flameLevel());
 			if (character.corruption - sc < 0) return "You cannot leave the Abyss with negative corruption.";
 		};
 		if (name == "11down" && character.raison) return "You chose the Raison d'Etre, so L'appel du Vide is closed to you.";
 		if (name == "11down" && (character.corruption < 250 || character.loan > 0)) return "This needs corruption of at least 250 and no loan.";
-		if (!(name == "9down" && character.atPool) && !seedFreeAscent(name) && brokerBlocksCost(portals[name][1] - corruptSave())) return BROKER_REASON;
+		if (!willPause && !(name == "9down" && character.atPool) && !seedFreeAscent(name) && brokerBlocksCost(portals[name][1] - corruptSave())) return BROKER_REASON;
 		return null;
 	};
 	if (type == "habitation") return (character.corruption < 0 || character.loan > 0) ? "A habitation needs corruption of at least 0 and no loan." : null;
@@ -2813,7 +3262,7 @@ function refusalReason(id, n) { // null if clicking the hotspot would do somethi
 		if (has("unselectableCurses", name)) return "This Curse was moved onto a companion and can't be taken again.";
 		if (has("curses", name)) {
 			if (!cursesMultiple[name]) return "You already have this Curse.";
-			if (character.curses.filter(function(x) { return x == name; }).length >= cursesMultiple[name]) return "You already have the maximum number of copies of this Curse.";
+			if (curseLevel(name) >= cursesMultiple[name]) return "You already have the maximum level of this Curse.";
 		};
 		if (name == "Conjoined" && !character.companions.length && !hasTwin()) return "Needs a hired companion or your twin to be conjoined to.";
 		if (name == "Null" && wonders["Empty-handed Broker"][1] > 0 && character.corruption + curses["Null"] - nullRefundable() < 0) return BROKER_REASON;
@@ -2847,7 +3296,7 @@ function refusalReason(id, n) { // null if clicking the hotspot would do somethi
 		if (has("companions", name)) return name + " is already travelling with you.";
 		if (maxStock[name]) { if (character.items.filter(function(x) { return x == name; }).length >= maxStock[name]) return "You can't buy more than " + maxStock[name] + "."; }
 		else if (!(canBuyMultiple.indexOf(name) + 1) && has("items", name)) return "You already have one.";
-		if (!isComp && !canFit(items[name][1])) return tooHeavy(items[name][1]);
+		if (!isComp && !canFit(items[name][1] + (name == "Flask (vending)" ? 0.8 : 0))) return tooHeavy(items[name][1] + (name == "Flask (vending)" ? 0.8 : 0));
 		if (items[name][0] > 0 && barterBlocked()) return BARTER_REASON;
 		if (items[name][0] > character.doubloons && !compOn("Cloud")) return "Not enough dubloons (needs " + items[name][0] + ").";
 		return null;
@@ -2869,7 +3318,33 @@ async function rightClickCurse(cname) { // right click: store the Curse in a fre
 	if (e) get('log').value += "-" + e + "\n";
 	updateInfo();
 }
+function vendFillReason() { // why the vending machine can't fill a flask of yours right now (null if it can)
+	if (character.pendingArrival) return "Only Curses can be accepted while crossing is paused.";
+	if (flaskEmpty() < 1) return "You have no empty flask to fill.";
+	if (!canFit(0.8)) return tooHeavy(0.8);
+	if (barterBlocked()) return BARTER_REASON;
+	if (character.doubloons < 1 && !compOn("Cloud")) return "Not enough dubloons (needs 1).";
+	return null;
+}
+async function fillVendingFlask() { // right click on the vending Flask: 1 doubloon fills an empty flask
+	if (vendFillReason()) { await uiAlert(vendFillReason()); return null; }
+	if (!await doubloonHandler(1, 1)) return null;
+	character.water[1] += 1;
+	character.itemWeight += 0.8;
+	return "Item: Flask (vending), filled an empty flask for 1 doubloon";
+}
 async function rightClickOverlayRaw(el, ev) { // returns false (no browser menu) only when the right click was used
+	if (el.id.indexOf("foraging:") == 0 && forageToggleable(el.id.substring(9)) && !character.dead && !character.ended) { // auto-foraging on/off (even when it has a side effect)
+		get('log').value += "*" + toggleAutoForage(el.id.substring(9)) + "\n"; updateInfo();
+		if (el.parentNode) hoverOverlay(el, ev);
+		return false;
+	};
+	if (el.id == "item:Flask (vending)" && !character.dead && !character.ended) { // fill one of your empty flasks for 1 doubloon
+		var fl = await fillVendingFlask();
+		if (fl) { get('log').value += "-" + fl + "\n"; updateInfo(); }
+		if (el.parentNode) hoverOverlay(el, ev);
+		return false;
+	};
 	if (el.id.indexOf("wonder:") == 0 && character.raison && character.raison.kind == "wonders") { // Eternal Return
 		var rw = await reactivateWonder(el.id.substring(7));
 		if (rw) { get('log').value += "-" + rw + "\n"; updateInfo(); }
@@ -2918,9 +3393,9 @@ function costPreview(id) { // tooltip lines "Time cost: X days" / "Corruption co
 	return out.length ? out.join("\n") : null;
 }
 function hoverOverlay(el, ev) { // pointing at a hotspot: red + not-allowed + the reason if it would be refused now, otherwise the normal green
-	var reason = refusalReason(el.id, currentLayer), hint = el.id.indexOf("curse:") == 0 ? mmHint(el.id.substring(6)) : (el.id.indexOf("wonder:") == 0 && canReactivate(el.id.substring(7)) ? "Right click to reactivate (Eternal Return: " + character.raisonLeft + " of 3 left)." : el.id == "wonder:Mirage Vault" && vaultErrandPossible() ? "Click to choose a companion to leave here to collect it (you lose them and their bonuses until you return); Cancel leaves nobody." : null);
+	var reason = refusalReason(el.id, currentLayer), hint = el.id.indexOf("curse:") == 0 ? mmHint(el.id.substring(6)) : (el.id.indexOf("foraging:") == 0 ? forageAutoHint(el.id.substring(9)) : el.id.indexOf("wonder:") == 0 && canReactivate(el.id.substring(7)) ? "Right click to reactivate (Eternal Return: " + character.raisonLeft + " of 3 left)." : el.id == "item:Flask (vending)" ? "Right click: fill an empty flask for 1 doubloon" + (vendFillReason() ? " (not possible now: " + vendFillReason().replace(/\.$/, "") + ")." : ".") : el.id == "wonder:Mirage Vault" && vaultErrandPossible() ? "Click to choose a companion to leave here to collect it (you lose them and their bonuses until you return); Cancel leaves nobody." : null);
 	if (el.classList) el.classList.toggle("blocked", !!reason);
-	var cost = costPreview(el.id), txt = reason ? (hint ? reason + " " + hint : reason) : hint;
+	var cost = costPreview(el.id), txt = reason ? (hint ? reason + (el.id.indexOf("foraging:") == 0 ? "\n" : " ") + hint : reason) : hint;
 	if (cost) txt = txt ? txt + "\n" + cost : cost;
 	showTip(txt, ev, !reason); // a hint alone has a green border
 }
@@ -2979,6 +3454,12 @@ function restoreState(json, logText) { // replaces the whole game state (in plac
 	Object.keys(st.character).forEach(function(k) { character[k] = st.character[k]; });
 	if (character.companionLoad) { for (var ck in character.companionLoad) character.itemWeight += character.companionLoad[ck]; } // older saves: gifted Relics' weight returns to you (gifting was removed)
 	delete character.companionLoad; delete character.gifted;
+	if (!character.curseLvl) { // older saves listed every copy of a repeatable Curse separately: fold the copies into levels
+		character.curseLvl = {};
+		var uniq = [];
+		character.curses.forEach(function(n) { if (uniq.indexOf(n) < 0) uniq.push(n); if (cursesMultiple[n]) character.curseLvl[n] = (character.curseLvl[n] || 0) + 1; });
+		character.curses = uniq;
+	}
 	Object.keys(st.wonderVisits).forEach(function(k) { if (wonders[k]) wonders[k][1] = st.wonderVisits[k]; });
 	currentLayer = st.currentLayer; vodFollowers = st.vodFollowers || []; lastTripDays = st.lastTripDays || 0;
 	cherryCtx = null; flyingNow = false; balloonFlight = false; balloonHopDays = 0;
@@ -3019,15 +3500,19 @@ function stateFromFlat(f) { // back to the text restoreState expects
 // The log only ever grows, so undo cuts it back to that length instead of every step keeping its own copy of the whole text.
 async function withUndo(fn) { // runs one user action; nested calls (an action that triggers others) are part of the same step
 	if (undoDepth > 0) return await fn();
-	var before = flatState(), beforeLen = get('log').value.length;
+	var before = flatState(), beforeLen = get('log').value.length, cancelled = false;
 	undoDepth++;
 	try { return await fn(); }
+	catch (e) { if (e !== DLG_CANCEL) throw e; cancelled = true; } // Cancel in any dialog: the whole action is rolled back below
 	finally {
 		undoDepth--;
+		if (cancelled) { restoreState(stateFromFlat(before), get('log').value.slice(0, beforeLen)); autosave(); refreshMenu(); }
+		else {
 		var after = flatState(), u = {}, any = false;
 		Object.keys(before).forEach(function(k) { if (before[k] !== after[k]) { u[k] = before[k]; any = true; } });
 		Object.keys(after).forEach(function(k) { if (!(k in before)) { u[k] = null; any = true; } });
 		if (any) { undoStack.push({u: u, n: beforeLen}); autosave(); refreshMenu(); } // the menu was last built during the action, before this step existed: rebuild so "Undo last action" appears
+		}
 	}
 }
 function navTo(n) { gotoPage(n); autosave(); } // page jumps are not undoable (ruled, step BH); the next action's snapshot already records the page
@@ -3038,6 +3523,9 @@ async function actionPicked() { // choosing an entry runs it at once; the menu t
 	sel.selectedIndex = 0;
 }
 async function doAction() { // the Actions menu: Undo, Save, Load, Export and Import work at any time (also after death); everything else is one undoable step
+	try { return await doActionMenu(); } catch (e) { if (e !== DLG_CANCEL) throw e; } // Cancel in a dialog of the non-undoable entries (Load): nothing happened
+}
+async function doActionMenu() {
 	var a = get('actionSelect').value;
 	if (a == "undo") return await undoLast();
 	if (a == "save") return await saveGame(true);
@@ -3047,7 +3535,8 @@ async function doAction() { // the Actions menu: Undo, Save, Load, Export and Im
 	return await withUndo(doActionRaw);
 }
 function rightClickOverlay(el, ev) { // the browser menu is suppressed (return false) exactly when the right click is used; decided at once, the action itself may wait for dialogs
-	var used = (el.id.indexOf("wonder:") == 0 && character.raison && character.raison.kind == "wonders") || (el.id.indexOf("curse:") == 0 && has("relics", "Managed Misfortune"));
+	var used = (el.id == "item:Flask (vending)" && !character.dead && !character.ended) || (el.id.indexOf("wonder:") == 0 && character.raison && character.raison.kind == "wonders") || (el.id.indexOf("curse:") == 0 && has("relics", "Managed Misfortune")) || (el.id.indexOf("foraging:") == 0 && forageToggleable(el.id.substring(9)) && !character.dead && !character.ended);
+	if (used && ev && ev.preventDefault) ev.preventDefault();
 	withUndo(async function() { return await rightClickOverlayRaw(el, ev); });
 	return !used;
 }
@@ -3061,10 +3550,17 @@ async function undoLast() {
 	restoreState(stateFromFlat(f), log.slice(0, Math.min(e.n, log.length)));
 	autosave();
 }
-function savePackage(withHistory) { return JSON.stringify({game: "AbyssDiver", version: SAVE_VERSION, state: stateJSON(), log: get('log').value, undo: withHistory ? undoStack : []}); }
-function autosave() { try { localStorage.setItem(SAVE_KEY, savePackage(false)); } catch (e) {} }
+function savePackage(withHistory, keep) { return JSON.stringify({game: "AbyssDiver", version: SAVE_VERSION, state: stateJSON(), log: get('log').value, undo: withHistory ? (keep === undefined ? undoStack : undoStack.slice(Math.max(0, undoStack.length - keep))) : []}); }
+function storeSave() { // the browser save includes the undo history, so Undo keeps working after resuming; if storage is too small the oldest steps are dropped until it fits
+	var keep = undoStack.length;
+	for (;;) {
+		try { localStorage.setItem(SAVE_KEY, savePackage(true, keep)); return keep; }
+		catch (e) { if (keep == 0) throw e; keep = Math.floor(keep / 2); }
+	}
+}
+function autosave() { try { storeSave(); } catch (e) {} }
 async function saveGame(say) {
-	try { localStorage.setItem(SAVE_KEY, savePackage(false)); if (say) await uiAlert("Game saved in this browser (day " + character.days + "). It is also saved automatically after every action."); }
+	try { storeSave(); if (say) await uiAlert("Game saved in this browser (day " + character.days + "), with its undo history. It is also saved automatically after every action."); }
 	catch (e) { await uiAlert("Saving in the browser failed (storage unavailable or full). Use 'Export game' instead."); }
 }
 function applyPackage(txt) { // validates a save package and replaces the game with it; false if it is not one
@@ -3080,7 +3576,7 @@ async function loadGame() {
 	var txt = null;
 	try { txt = localStorage.getItem(SAVE_KEY); } catch (e) {}
 	if (!txt) { await uiAlert("There is no saved game in this browser."); return; }
-	if (!await uiConfirm("Replace the current game with the saved one? (The undo history of this session is dropped.)")) return;
+	if (!await uiConfirm("Replace the current game with the saved one? (Its saved undo history replaces the current one.)")) return;
 	if (!applyPackage(txt)) await uiAlert("The saved game could not be read.");
 }
 function exportGame() { // a JSON file with the state, the log and the whole undo history
@@ -3098,8 +3594,10 @@ function importGame() {
 		if (!f) return;
 		var rd = new FileReader();
 		rd.onload = async function() {
-			if (!await uiConfirm("Replace the current game with the one in " + f.name + "?")) return;
-			if (!applyPackage(String(rd.result))) await uiAlert("That file is not a valid Abyss Diver save.");
+			try {
+				if (!await uiConfirm("Replace the current game with the one in " + f.name + "?")) return;
+				if (!applyPackage(String(rd.result))) await uiAlert("That file is not a valid Abyss Diver save.");
+			} catch (e) { if (e !== DLG_CANCEL) throw e; }
 		};
 		rd.readAsText(f);
 	};
@@ -3111,7 +3609,9 @@ async function offerResume() { // on page load: continue the autosaved game if t
 	if (!txt) return;
 	var day = "?";
 	try { day = JSON.parse(JSON.parse(txt).state).character.days; } catch (e) { return; }
-	if (await uiConfirm("A saved game was found (day " + day + "). OK = resume it, Cancel = start a new game (the save is replaced after your first action).")) applyPackage(txt);
+	try {
+		if (await uiConfirm("A saved game was found (day " + day + "). The save is replaced after your first action if you start a new game.\n\nCancel = decide later: nothing changes yet, and Actions \u2192 Load game still resumes the save until your first action.", "Resume it", "Start a new game")) applyPackage(txt);
+	} catch (e) { if (e !== DLG_CANCEL) throw e; }
 }
 async function loader() {
 	var navContents = "";
@@ -3143,7 +3643,7 @@ async function loader() {
 </div>
 <section id="section-1" class=" ">
 <div class="section-description description">
-<p><b><a href="https://stellinearized.github.io/adventure.html">Stellinearized</a>
+<p><b><a href="https://stellinearized.github.io/adventure.html" target="_blank">Stellinearized</a>
 <br><br>Abyss Diver</b><br>Images | <a href="https://stellinearized.github.io/abyssaltunes" target="_blank">Audio</a></p>
 </div>
 </section>
@@ -3157,7 +3657,7 @@ async function loader() {
 <option value="">Actions...</option>
 </select>
 </div>
-<div id="statsContainer" class="scrolly">
+<div id="statsContainer">
 <div id="daysDiv" style="margin-top:5px">Day: <span id="days"></span></div>
 <div id="layerDiv">Layer: <span id="layerNum"></span></div>
 <div id="corruptionDiv">Corruption: <span id="corruption"></span></div>
@@ -3168,11 +3668,11 @@ async function loader() {
 <div id="companionsDiv">Companions: <span id="companions">none</span></div>
 </div>
 <hr />
-<div id="items" class="scrolly">Items: </div>
+<div id="items">Items: </div>
 <hr />
-<div id="relics" class="scrolly">Relics: </div>
+<div id="relics">Relics: </div>
 <hr />
-<div id="curses" class="scrolly">Curses: </div>
+<div id="curses">Curses: </div>
 </div>
 <textarea id="log" readonly></textarea>
 </div>
