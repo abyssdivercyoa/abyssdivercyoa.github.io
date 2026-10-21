@@ -74,7 +74,7 @@ body {
 	border-radius : 12px;
 }
 .overlay:hover {
-	border : 4px solid green;
+	border : 4px solid #00d000;
 }
 /* overlay states (set when you point at it): green + pointer = the click does something now; red + not-allowed + a tooltip with the reason = it is refused now */
 .overlay.blocked { cursor : not-allowed; }
@@ -134,6 +134,10 @@ body {
 #actions select {
 	flex : 1 1 0;
 	min-width : 0;
+}
+#log, #actions select {
+	background-color : black;
+	color : white;
 }
 #infoContainer {
 	height : 80vh;
@@ -282,9 +286,9 @@ hr {
 }
 </style>
 <script type="text/javascript">
-// Last modified: 2026-10-20 02:20:00 UTC (layer time savings now derived live by layerSave() instead of stored on portal arrival: covers mid-layer pickups, nav jumps and devoured Relics)
+// Last modified: 2026-10-21 04:10:00 UTC (resume prompt: "Resume saved game" / "Start a new game" with no Cancel; starting a new game deletes the old autosave; unused Save/Load menu code removed)
 var dialogOpen = false, dialogQueue = [];
-// Every dialog except a plain OK notice has a Cancel button. Cancel throws DLG_CANCEL, which withUndo() catches: the whole action that opened the dialog is rolled back as if it had never been clicked
+// Every dialog except a plain OK notice (and the two-way resume prompt) has a Cancel button. Cancel throws DLG_CANCEL, which withUndo() catches: the whole action that opened the dialog is rolled back as if it had never been clicked
 // (time, food, corruption and log lines included), so Cancel never silently picks an answer. Questions with a real "no" answer have their own button for it.
 var DLG_CANCEL = {dialogCancelled: true};
 function dialogRun(kind, text, def, extra) {
@@ -295,7 +299,7 @@ function dialogRun(kind, text, def, extra) {
 	});
 }
 function uiAlert(text) { return dialogRun("alert", text); }
-function uiConfirm(text, yesLabel, noLabel) { return dialogRun("confirm", text, undefined, {yes: yesLabel, no: noLabel}); } // true = yes/OK. With a noLabel it is a real question: [Cancel] [No] [Yes] (false = No); without one it is [Cancel] [OK]
+function uiConfirm(text, yesLabel, noLabel, noCancel) { return dialogRun("confirm", text, undefined, {yes: yesLabel, no: noLabel, noCancel: noCancel}); } // true = yes/OK. With a noLabel it is a real question: [Cancel] [No] [Yes] (false = No); without one it is [Cancel] [OK]
 function uiPrompt(text, def) { return dialogRun("prompt", text, def); }
 // uiForm(text, fields, check): one dialog with several fields. Resolves to {key: value, ...} on OK; Cancel aborts the action (see DLG_CANCEL).
 // fields: a list of rows. A row is a field object, or an array of them side by side; a string inside such an array is drawn between the fields as an arrow (e.g. [curseField, "→", companionField]).
@@ -558,7 +562,7 @@ function dialogNext(nestedD) {
 	var cancelBtn = null;
 	if (d.kind == "alert") ok = button("OK", undefined);
 	else if (d.kind == "confirm") {
-		cancelBtn = button("Cancel", DLG_CANCEL);
+		if (!d.extra.noCancel) cancelBtn = button("Cancel", DLG_CANCEL); // noCancel: a plain two-way choice (the resume prompt)
 		if (d.extra.no) button(d.extra.no, false);
 		ok = button(d.extra.yes || (d.extra.no ? "Yes" : "OK"), true);
 	}
@@ -1734,8 +1738,8 @@ async function threatsAfterDay(lightToday) {
 async function inanisDay() {
 	if (await huskNow("Inanis Ego")) return;
 	var d = ++character.inanisDays;
-	if (d == 30) { await uiAlert("Inanis Ego: 30 dolls of your alternate selves now follow you. They no longer ambush: they close in from both sides in coordinated pincer attacks!"); note("Inanis Ego: 30 dolls (coordinated pincer attacks)"); }
-	else if (d == 70) { await uiAlert("Inanis Ego: 70 dolls of your alternate selves surround you. They are smarter now, and some of them carry weak Relics of their own!"); note("Inanis Ego: 70 dolls (some carry weak Relics)"); }
+	if (d == 30) { await uiAlert("Inanis Ego: 30 dolls of your alternate selves now follow you. They no longer ambush: they close in from both sides in coordinated pincer attacks!"); note("Inanis Ego: 30 dolls"); }
+	else if (d == 70) { await uiAlert("Inanis Ego: 70 dolls of your alternate selves surround you. They are smarter now, and some of them carry weak Relics of their own!"); note("Inanis Ego: 70 dolls"); }
 	else if (d == 100) await forcedHabitation("Inanis Ego", "Inanis Ego: 100 dolls of your alternate selves now match your intelligence. There is no outwitting them.");
 } // Inanis Ego: the number of dolls following you equals the days you have spent in this layer (no notes, nothing forced: the day-100 Halcyon Daze is left to Override)
 async function elderDay() { // The Elder: counters are cumulative
@@ -1804,7 +1808,7 @@ function flaskCapacity() { return character.flasks + (hasRelic("Everhevea") ? 2 
 function recomputeFlags() { // after items leave (Tunnel) or return
 	var it = function(n) { return has("items", n); };
 	character.hasEncyclopedia = it("Encyclopedia Abyssia") || it("Smartphone") || compOn("Saeko");
-	character.hasSword = it("Sword") || hasRelic("Giddy Reaper") || hasRelic("Sunbeam") || hasRelic("Joyous Sunder");
+	character.hasSword = it("Sword") || hasRelic("Sunbeam") || hasRelic("Joyous Sunder");
 	character.hasStrongLight = it("Flashlight") || it("Smartphone") || hasRelic("Sunbeam") || hasRelic("Glare Vantage");
 	if (character.moonInstalled && !(hasRelic("Moonwatcher") && hasCurse("Eye on the Prize"))) character.moonInstalled = false; // sold, or the empty eye socket is gone
 	character.hasLight = character.hasStrongLight || character.moonInstalled; // Moonwatcher gives light only when installed
@@ -2102,7 +2106,7 @@ async function gainRelic(name) {
 	character.relics.push(name);
 	character.itemWeight += relicWeight(name);
 	if (name == "Sibyl Blend") character.relicTimeSave += 1;
-	if (name == "Giddy Reaper" || name == "Sunbeam" || name == "Joyous Sunder") character.hasSword = true;
+	if (name == "Sunbeam" || name == "Joyous Sunder") character.hasSword = true;
 	if (name == "Sunbeam") character.hasLight = character.hasStrongLight = true;
 	if (name == "Glare Vantage") character.hasLight = character.hasStrongLight = true; // a light source, but not an effective heat source
 	if (name == "Devil's Own") character.devilsOwn = 1; // one free reroll of Cherry's luck for the whole adventure
@@ -2181,9 +2185,9 @@ function curseConflict(name, held) { // held = permanent Curses only; returns th
 var HUMAN_WEIGHT = 60; // a person weighs about 60 kg (as the text says of companions)
 function hasTwin() { return character.twin && has("curses", "Double Trouble"); } // Double Trouble gives you a twin; removing the Curse removes the twin
 function captiveWeight() { return has("items", "Rope") ? 0 : HUMAN_WEIGHT*character.captives; } // a bandit on a Rope trails behind you and counts as no weight
-async function offerCaptive() { // after an ambush is resolved you may also subdue one bandit with a weapon (Sword or Pistol) and a Rope, and bring it along (for the Bloodstained Sanctuary, far below)
+async function offerCaptive() { // after an ambush is resolved you may also subdue one bandit with a weapon (sword or Pistol) and a Rope, and bring it along (for the Bloodstained Sanctuary, far below)
 	if (!has("items", "Rope") || !(character.hasSword || has("items", "Pistol"))) return;
-	if (!await uiConfirm("Capture one of the bandits as well, using your weapon and Rope? He will trail behind you on the Rope (no weight); the Rope stays usable.", "Capture bandit", "No")) return;
+	if (!await uiConfirm("Capture one of the bandits as well, using your weapon and Rope? The bandit will trail behind you on the Rope (no weight); the Rope stays usable.", "Capture bandit", "No")) return;
 	character.captives += 1;
 	note("Opportunistic Bandits: captured one (Rope)");
 }
@@ -2194,7 +2198,7 @@ async function checkBandits() { // on emerging into layer 1 from a lower layer
 	if (await huskNow("Opportunistic Bandits")) return;
 	var labels = [], acts = [];
 	if (character.ammo >= ammoCost(2)) { labels.push("fire 2 warning shots (" + ammoCost(2) + " bullet(s))"); acts.push(async function() { if (await ammoHandler(2)) note("Opportunistic Bandits: fought off (" + bulletsStr(ammoCost(2)) + ")"); }); }
-	if (compOn("Khemia") && character.hasSword) { labels.push("Khemia drives them off with your Sword"); acts.push(function() { note("Opportunistic Bandits: fought off (Khemia + Sword)"); }); }
+	if (compOn("Khemia") && character.hasSword) { labels.push("Khemia drives them off with a sword"); acts.push(function() { note("Opportunistic Bandits: fought off (Khemia + sword)"); }); }
 	labels.push("drop Relics and escape"); acts.push(async function() {
 		var tries = 0;
 		while (banditWorth() >= 150) {
@@ -2212,7 +2216,7 @@ async function checkBandits() { // on emerging into layer 1 from a lower layer
 }
 async function resolveGourmet() {
 	var labels = [], acts = [];
-	if (character.hasSword) { labels.push("fight it off with your Sword"); acts.push(function() { note("Baying Gourmet: fought off (Sword)"); }); }
+	if (character.hasSword) { labels.push("fight it off with a sword"); acts.push(function() { note("Baying Gourmet: fought off (sword)"); }); }
 	if (character.ammo >= ammoCost(3)) { labels.push("shoot it (" + ammoCost(3) + " bullet(s))"); acts.push(async function() { if (await ammoHandler(3)) note("Baying Gourmet: fought off (" + bulletsStr(ammoCost(3)) + ")"); }); }
 	if (character.food[0] >= 5) { labels.push("give up 5 days of food rations"); acts.push(function() { character.food[0] -= 5; character.itemWeight -= 5*items["Food Rations"][1]; note("Baying Gourmet: gave up 5 days of rations"); }); }
 	var k = await askThreat("A Baying Gourmet attacks!", labels, false);
@@ -2326,20 +2330,20 @@ function shootOption(labels, acts, n, who) { // a bullet option, if you can affo
 	};
 }
 async function resolveLesserBeast() { // layer 3
-	if (compOn("Khemia") && character.hasSword) { await uiAlert("A Lesser Tentacle Beast attacks! Khemia fights it off with the Sword."); note("Lesser Tentacle Beast: fought off (Khemia + Sword)"); return; }
+	if (compOn("Khemia") && character.hasSword) { await uiAlert("A Lesser Tentacle Beast attacks! Khemia fights it off with a sword."); note("Lesser Tentacle Beast: fought off (Khemia + sword)"); return; }
 	var labels = [], acts = [];
 	shootOption(labels, acts, 11, "Lesser Tentacle Beast");
 	var k = await askThreat("A Lesser Tentacle Beast attacks!", labels, false);
 	if (k >= 0) { await acts[k](); return; }
-	if (character.hasSword) await addStatus("mild injuries", 2, 1, 3, 1, false, "*Lesser Tentacle Beast: mild injuries (Sword)"); // next 3 travel costs +2 days
+	if (character.hasSword) await addStatus("mild injuries", 2, 1, 3, 1, false, "*Lesser Tentacle Beast: mild injuries (sword)"); // next 3 travel costs +2 days
 	else await addStatus("serious limp", 0, 1, 3, 1, true, "*Lesser Tentacle Beast: serious limp"); // next 3 travel costs doubled or +2, whichever is longer
 }
 async function resolveSwallower() { // layer 4
 	var labels = [], acts = [];
 	shootOption(labels, acts, 5, "Drifting Swallower");
 	if (compOn("Khemia") && character.hasSword) {
-		labels.push("Khemia fights it with the Sword (serious injuries)");
-		acts.push(async function() { await addStatus("serious injuries", 1, 1, 6, 1, false, "*Drifting Swallower: serious injuries (Khemia + Sword)"); });
+		labels.push("Khemia fights it with a sword (serious injuries)");
+		acts.push(async function() { await addStatus("serious injuries", 1, 1, 6, 1, false, "*Drifting Swallower: serious injuries (Khemia + sword)"); });
 	};
 	var k = await askThreat("A Drifting Swallower attacks!", labels, false);
 	if (k >= 0) { await acts[k](); return; }
@@ -2388,7 +2392,7 @@ async function resolveGreaterBeast() { // layer 6: "tentacle fucked", unable to 
 	else days = 12;
 	if (compOn("Cherry")) days = Math.max(0, days - character.cherryShorten);
 	if (days > 0 && await quickHeal("Use a Medkit to cure it at once (skipping " + days + " days)?")) return;
-	if (days > 0) { note("Greater Tentacle Beast: " + (days == 1 ? "1 day" : days + " days") + " lost" + (who == "Khemia is" ? " (Khemia + Sword)" : "")); await timeHandler(days, false, {noCounters: true}); }
+	if (days > 0) { note("Greater Tentacle Beast: " + (days == 1 ? "1 day" : days + " days") + " lost" + (who == "Khemia is" ? " (Khemia + sword)" : "")); await timeHandler(days, false, {noCounters: true}); }
 }
 // ---- actions panel ----
 var RAISON_NAMES = {purity: "Yggdrasil Seed", wonders: "Eternal Return", husk: "Hardened Husk"};
@@ -3193,7 +3197,7 @@ async function takeActionInner(obj) {
 						pOpts.push({value: "plank", label: "Cut wood plank (sell for 35 doubloons, or turn to protective gear (+25 corruption) at Relic workshop)"});
 					};
 					if (burnOK) pOpts.push({value: "burn", label: "Burn the whole tree (+20 corruption" + (torchFree ? "" : ", uses 1 Torch") + ")"});
-					if (!pOpts.length) { if (character.purityLeft == 4) await uiAlert("You have no Sword and no Torch to burn the tree with."); return; }
+					if (!pOpts.length) { if (character.purityLeft == 4) await uiAlert("You have no sword and no Torch to burn the tree with."); return; }
 					var pAns = await uiForm("Purity Tree (" + character.purityLeft + " of 4 sections left). Cancel to leave.", [{key: "pick", kind: "radio", options: pOpts}]);
 					if (!pAns || !pAns.pick) break;
 					if (pAns.pick == "burn") {
@@ -3459,7 +3463,7 @@ function refreshMenu() { // the Actions menu only lists what can apply right now
 	if (currentLayer == 0 && character.relics.length > 0) list.push(["sell", "Sell Relic"]);
 	if (character.water[2] >= 1 && character.jinxedFlame > 0) list.push(["ward", "Drink Ward Water"]);
 	if (!navJumpOnly) list.push(["override", "Override"]); // dev mode only (Alt+S)
-	if (stateChanged()) list.push(["export", "Export game"]); // nothing to export while the game is still in its initial state
+	if (undoStack.length > 0) list.push(["export", "Export game"]); // nothing to export until there is an action to export (every game action adds an undo step)
 	list.push(["import", "Import game"]);
 	var key = list.map(function(o) { return o[0]; }).join();
 	if (sel.getAttribute && sel.getAttribute("data-key") === key) return;
@@ -3534,8 +3538,8 @@ function gotoPage(n) {
 	updateLayerLine();
 	get('pageContainer').style.backgroundImage = 'url("Assets/' + (n+1) + (n == 10 ? '.gif' : '.png') + '")';
 	get('pageContainer').style.height = layers[n][1] + "px";
-	get('track').src = "Assets/" + (n+1) + ".mp3";
-	get('player').load();
+	var src = "Assets/" + (n+1) + ".mp3";
+	if (get('track').getAttribute && get('track').getAttribute("src") != src) { get('track').src = src; get('player').load(); }
 	renderOverlay(n);
 	get('section-1').style.display = (n == 0) ? "" : "none";
 }
@@ -3649,12 +3653,12 @@ function refusalReason(id, n) { // null if clicking the hotspot would do somethi
 		var wt = character.ringAbsorbed ? 0 : relicWeight(name);
 		if (!canFit(wt)) return tooHeavy(wt);
 		var est = Math.max(0, relics[name][1] - character.relicTimeSave - travelSave() - layerSave());
-		if ((name == "Forest's Gift" || name == "Catastrophe") && !character.hasSword) return "Needs a Sword.";
+		if ((name == "Forest's Gift" || name == "Catastrophe") && !character.hasSword) return "Needs a sword.";
 		if (["Orbweaver", "Timekeeper's Keepsake", "Drifting Aperture", "Lifespanner"].indexOf(name) >= 0 && !has("items", "Rope")) return "Needs a Rope.";
 		if ((name == "Acrobatic Accord" || name == "Forbidden Grimoire") && !has("items", "Scuba Gear")) return "Needs Scuba Gear.";
 		if (["Umbra Trident", "Moonwatcher", "Phoenix Obol", "Absolute Oracle"].indexOf(name) >= 0 && !lightOK(true, est)) return "Needs a light source.";
 		if (name == "Arbiter of Dawn" && !lightOK(false, est)) return "Needs a light that works underwater.";
-		if (name == "Gilded Prison" && !character.hasSword && !heatOK(est + 1)) return "Needs a Sword or a heat source.";
+		if (name == "Gilded Prison" && !character.hasSword && !heatOK(est + 1)) return "Needs a sword or a heat source.";
 		if (name == "Twin Polaris" && 60*character.companions.length + totalWeight() < 90) return "Needs a combined weight of at least 90 kg.";
 		if (name == "Granted Granite" && 60*character.companions.length + totalWeight() < 200) return "Needs a combined weight of at least 200 kg.";
 		if (name == "Empath Coil" && character.ammo < ammoCost(1)) return "Needs ammo.";
@@ -3770,7 +3774,7 @@ function costPreview(id) { // tooltip lines "Time cost: X days" / "Corruption co
 	return out.length ? out.join("\n") : null;
 }
 function hoverOverlay(el, ev) { // pointing at a hotspot: red + not-allowed + the reason if it would be refused now, otherwise the normal green
-	var reason = refusalReason(el.id, currentLayer), hint = el.id.indexOf("curse:") == 0 ? mmHint(el.id.substring(6)) : ((el.id == "item:Pistol" || el.id == "item:Ammo") && has("items", "Pistol") && !character.dead && !character.ended) ? "Click to buy Ammo" : (el.id.indexOf("foraging:") == 0 ? forageAutoHint(el.id.substring(9)) : el.id.indexOf("wonder:") == 0 && canReactivate(el.id.substring(7)) ? "Right-click to reactivate (Eternal Return: " + character.raisonLeft + " of 3 left)." : el.id == "item:Flask (vending)" && !character.dead && !character.ended ? "Right-click: fill an empty flask for 1 doubloon" : el.id == "wonder:Mirage Vault" && vaultErrandPossible() ? "Click to choose a companion to leave here to collect it (you lose them and their bonuses until you return); Cancel leaves nobody." : workshopHint(el.id));
+	var reason = refusalReason(el.id, currentLayer), hint = el.id.indexOf("curse:") == 0 ? mmHint(el.id.substring(6)) : ((el.id == "item:Pistol" || el.id == "item:Ammo") && has("items", "Pistol") && !character.dead && !character.ended) ? "Click to buy Ammo" : (el.id.indexOf("foraging:") == 0 ? forageAutoHint(el.id.substring(9)) : el.id.indexOf("wonder:") == 0 && canReactivate(el.id.substring(7)) ? "Right-click to reactivate (Eternal Return: " + character.raisonLeft + " of 3 left)." : el.id == "item:Flask (vending)" && !character.dead && !character.ended ? "Right-click: fill an empty flask for 1 doubloon" : workshopHint(el.id));
 	if (el.classList) el.classList.toggle("blocked", !!reason);
 	var cost = costPreview(el.id), txt = reason ? (hint ? reason + (el.id.indexOf("foraging:") == 0 ? "\n" : " ") + hint : reason) : hint;
 	if (cost) txt = txt ? txt + "\n" + cost : cost;
@@ -3823,7 +3827,11 @@ function renderOverlay(n) {
 // ---- Undo, save and load (step BG). Every user action (a click, a right-click, an Actions-menu entry, a page jump) runs inside withUndo: the state before it is
 // pushed on an unlimited stack when the action changed anything. A snapshot holds `character`, the Wonder visit counts, currentLayer, vodFollowers, lastTripDays and the log text.
 // Random rolls are not stored: undoing and repeating an action may give a different die result (ruled).
-var undoStack = [], undoDepth = 0, SAVE_KEY = "abyssDiverSave", SAVE_VERSION = 1;
+var undoStack = [], undoDepth = 0, SAVE_KEY = "abyssDiverSave", SAVE_VERSION = 1, UNDO_KEY = "abyssDiverUndo:", LOG_KEY = "abyssDiverLog:";
+// The browser save is several keys: SAVE_KEY holds a small header (the state, how many undo steps and log chunks there are), UNDO_KEY+i holds undo step i and LOG_KEY+k the k-th piece of the log.
+// `persist` describes what is stored now: steps base..count-1 and the first logLen characters of the log (in logChunks pieces). While ok, an autosave only has to add what is new
+// (actions only ever push a step and append to the log); anything that rewrites history (restoreState: Undo, a cancelled action, Load/Import) clears ok and the next autosave rewrites everything.
+var persist = {ok: false, base: 0, count: 0, logLen: 0, logChunks: 0};
 function infReplacer(k, v) { if (typeof v == "number" && isFinite(v)) return Math.round(v*100)/100; return v === Infinity ? "__Infinity__" : v; } // saves round numbers to 2 decimals (removes float noise like 4.999999998 but keeps 0.25 from Minish-ish) // statuses last until cured: JSON has no Infinity
 function infReviver(k, v) { return v === "__Infinity__" ? Infinity : v; }
 function stateJSON() {
@@ -3832,20 +3840,12 @@ function stateJSON() {
 	return JSON.stringify({character: character, wonderVisits: visits, currentLayer: currentLayer, vodFollowers: vodFollowers, lastTripDays: lastTripDays}, infReplacer);
 }
 function restoreState(json, logText) { // replaces the whole game state (in place, so every reference to `character` stays valid) and redraws the page
+	persist.ok = false; // history was rewritten: the browser save must be rewritten in full
 	var st = JSON.parse(json, infReviver);
 	Object.keys(character).forEach(function(k) { delete character[k]; });
 	Object.keys(st.character).forEach(function(k) { character[k] = st.character[k]; });
-	if (character.companionLoad) { for (var ck in character.companionLoad) character.itemWeight += character.companionLoad[ck]; } // older saves: gifted Relics' weight returns to you (gifting was removed)
-	delete character.companionLoad; delete character.gifted;
-	if (!character.curseCherry) character.curseCherry = {}; // older saves: no Cherry surcharges were recorded
-	if (!character.curseLvl) { // older saves listed every copy of a repeatable Curse separately: fold the copies into levels
-		character.curseLvl = {};
-		var uniq = [];
-		character.curses.forEach(function(n) { if (uniq.indexOf(n) < 0) uniq.push(n); if (cursesMultiple[n]) character.curseLvl[n] = (character.curseLvl[n] || 0) + 1; });
-		character.curses = uniq;
-	}
 	Object.keys(st.wonderVisits).forEach(function(k) { if (wonders[k]) wonders[k][1] = st.wonderVisits[k]; });
-	currentLayer = st.currentLayer; vodFollowers = st.vodFollowers || []; lastTripDays = st.lastTripDays || 0;
+	currentLayer = st.currentLayer; vodFollowers = st.vodFollowers; lastTripDays = st.lastTripDays;
 	wonders["Empty-handed Broker"][2] = character.brokerCrumbled ? -1 : 1; // the rubble state follows the saved state (Undo of the first trip down brings the Broker back)
 	cherryCtx = null; flyingNow = false; balloonFlight = false; balloonHopDays = 0;
 	get('log').value = logText;
@@ -3870,14 +3870,8 @@ function flatState() { // the state as {key: JSON text}, one key per character f
 	f.w = JSON.stringify(visits); f.l = JSON.stringify(currentLayer); f.v = JSON.stringify(vodFollowers); f.t = JSON.stringify(lastTripDays);
 	return f;
 }
-var initialFlat = null; // the flat state at page load (set in loader before any resume), the baseline for "is there anything to export or undo"
-function stateChanged() { // true when the game differs from its initial state; the page you are viewing doesn't count (page jumps aren't game actions)
-	if (!initialFlat || undoStack.length > 0) return true;
-	var f = flatState(), keys = Object.keys(f).concat(Object.keys(initialFlat));
-	return keys.some(function(k) { return k != "l" && f[k] !== initialFlat[k]; });
-}
 function packageChanged(txt) { // a save has something to resume exactly when its undo history is not empty (every game action adds a step; page jumps don't); an unreadable package counts as changed
-	try { var pkg = JSON.parse(txt); return !Array.isArray(pkg.undo) || pkg.undo.length > 0; } catch (e) { return true; }
+	try { return JSON.parse(txt).undo.length > 0; } catch (e) { return true; }
 }
 function stateFromFlat(f) { // back to the text restoreState expects
 	var ch = {};
@@ -3904,21 +3898,16 @@ async function withUndo(fn) { // runs one user action; nested calls (an action t
 		try { updateInfo(); } catch (e) { } // actions that end early (pause, refusal, Cancel) still leave the panel current
 	}
 }
-function navTo(n) { gotoPage(n); if (stateChanged()) autosave(); } // page jumps are not undoable (ruled, step BH); the next action's snapshot already records the page
+function navTo(n) { gotoPage(n); if (undoStack.length > 0) autosave(); } // page jumps are not undoable (ruled, step BH); the next action's snapshot already records the page
 async function actionPicked() { // choosing an entry runs it at once; the menu then returns to the placeholder so the same entry can be picked again
 	var sel = get('actionSelect');
 	if (!sel.value) return;
 	await doAction();
 	sel.selectedIndex = 0;
 }
-async function doAction() { // the Actions menu: Undo, Save, Load, Export and Import work at any time (also after death); everything else is one undoable step
-	try { return await doActionMenu(); } catch (e) { if (e !== DLG_CANCEL) throw e; } // Cancel in a dialog of the non-undoable entries (Load): nothing happened
-}
-async function doActionMenu() {
+async function doAction() { // the Actions menu: Undo, Export and Import work at any time (also after death); everything else is one undoable step
 	var a = get('actionSelect').value;
 	if (a == "undo") return await undoLast();
-	if (a == "save") return await saveGame(true);
-	if (a == "load") return await loadGame();
 	if (a == "export") return exportGame();
 	if (a == "import") return importGame();
 	return await withUndo(doActionRaw);
@@ -3932,45 +3921,72 @@ function rightClickOverlay(el, ev) { // the browser menu is suppressed (return f
 async function undoLast() {
 	if (!undoStack.length) { await uiAlert("Nothing to undo."); return; }
 	var e = undoStack.pop();
-	if (e.s !== undefined) { restoreState(e.s, e.log); autosave(); return; } // a step from an older save (full snapshot)
 	var f = flatState();
 	Object.keys(e.u).forEach(function(k) { if (e.u[k] === null) delete f[k]; else f[k] = e.u[k]; });
 	var log = get('log').value;
 	restoreState(stateFromFlat(f), log.slice(0, Math.min(e.n, log.length)));
 	autosave();
 }
-function savePackage(withHistory, keep) { return JSON.stringify({game: "AbyssDiver", version: SAVE_VERSION, state: stateJSON(), log: get('log').value, undo: withHistory ? (keep === undefined ? undoStack : undoStack.slice(Math.max(0, undoStack.length - keep))) : []}); }
-function storeSave() { // the browser save includes the undo history, so Undo keeps working after resuming; if storage is too small the oldest steps are dropped until it fits
-	var keep = undoStack.length;
+function savePackage() { return JSON.stringify({game: "AbyssDiver", version: SAVE_VERSION, state: stateJSON(), log: get('log').value, undo: undoStack}); } // the export file: one JSON text with everything
+function headerJSON(base, count, logLen, logChunks) { return JSON.stringify({game: "AbyssDiver", version: SAVE_VERSION, state: stateJSON(), base: base, count: count, logLen: logLen, logChunks: logChunks}); }
+function clearSave(withHeader) { // removes the undo and log keys of the browser save (and its header too if withHeader)
+	var stale = [], i, k;
+	for (i = 0; i < localStorage.length; i++) { k = localStorage.key(i); if (k.indexOf(UNDO_KEY) === 0 || k.indexOf(LOG_KEY) === 0) stale.push(k); }
+	if (withHeader) stale.push(SAVE_KEY);
+	stale.forEach(function(key) { localStorage.removeItem(key); });
+	persist = {ok: false, base: 0, count: 0, logLen: 0, logChunks: 0};
+}
+function storeSave() { // full rewrite of the browser save, including the undo history so Undo keeps working after resuming; if storage is too small the oldest steps are dropped until it fits
+	var log = get('log').value, len = undoStack.length, keep = len;
+	persist.ok = false;
 	for (;;) {
-		try { localStorage.setItem(SAVE_KEY, savePackage(true, keep)); return keep; }
+		try {
+			clearSave(false);
+			var i;
+			for (i = len - keep; i < len; i++) localStorage.setItem(UNDO_KEY + i, JSON.stringify(undoStack[i]));
+			localStorage.setItem(LOG_KEY + 0, log);
+			localStorage.setItem(SAVE_KEY, headerJSON(len - keep, len, log.length, 1));
+			persist = {ok: true, base: len - keep, count: len, logLen: log.length, logChunks: 1};
+			return keep;
+		}
 		catch (e) { if (keep == 0) throw e; keep = Math.floor(keep / 2); }
 	}
 }
-function autosave() { try { storeSave(); } catch (e) {} }
-async function saveGame(say) {
-	try { storeSave(); if (say) await uiAlert("Game saved in this browser (day " + character.days + "), with its undo history. It is also saved automatically after every action."); }
-	catch (e) { await uiAlert("Saving in the browser failed (storage unavailable or full). Use 'Export game' instead."); }
+function autosave() { // after every action: stores only the new undo step(s) and the new log text, then the header; a full rewrite whenever history was rewritten or an incremental write fails
+	try {
+		var log = get('log').value, len = undoStack.length;
+		if (!persist.ok || len < persist.count || log.length < persist.logLen) { storeSave(); return; }
+		var chunks = persist.logChunks;
+		for (var i = persist.count; i < len; i++) localStorage.setItem(UNDO_KEY + i, JSON.stringify(undoStack[i]));
+		if (log.length > persist.logLen) localStorage.setItem(LOG_KEY + chunks++, log.slice(persist.logLen));
+		localStorage.setItem(SAVE_KEY, headerJSON(persist.base, len, log.length, chunks));
+		persist.count = len; persist.logLen = log.length; persist.logChunks = chunks; // only now: the header is what makes the new keys count
+	} catch (e) { persist.ok = false; try { storeSave(); } catch (e2) {} }
+}
+function readStored() { // the browser save as one package text for applyPackage: null if there is none, "unreadable" if it is damaged or incomplete
+	var raw = null;
+	try { raw = localStorage.getItem(SAVE_KEY); } catch (e) { return null; }
+	if (!raw) return null;
+	try {
+		var h = JSON.parse(raw), undo = [], log = "", i, t;
+		for (i = h.base; i < h.count; i++) { t = localStorage.getItem(UNDO_KEY + i); if (t === null) throw 0; undo.push(JSON.parse(t)); }
+		for (i = 0; i < h.logChunks; i++) { t = localStorage.getItem(LOG_KEY + i); if (t === null) throw 0; log += t; }
+		if (log.length !== h.logLen) throw 0;
+		return JSON.stringify({game: h.game, version: h.version, state: h.state, log: log, undo: undo});
+	} catch (e) { return "unreadable"; }
 }
 function applyPackage(txt) { // validates a save package and replaces the game with it; false if it is not one
 	var pkg;
 	try { pkg = JSON.parse(txt); JSON.parse(pkg.state, infReviver); } catch (e) { return false; }
-	if (!pkg || pkg.game != "AbyssDiver" || typeof pkg.state != "string" || typeof pkg.log != "string") return false;
+	if (!pkg || pkg.game != "AbyssDiver" || typeof pkg.state != "string" || typeof pkg.log != "string" || !Array.isArray(pkg.undo)) return false;
 	if (pkg.version > SAVE_VERSION) return false;
 	restoreState(pkg.state, pkg.log);
-	undoStack = Array.isArray(pkg.undo) ? pkg.undo : [];
+	undoStack = pkg.undo;
 	refreshMenu(); // restoreState built the menu while undoStack was still the old one: rebuild so "Undo last action" shows after resume/load/import
 	return true;
 }
-async function loadGame() {
-	var txt = null;
-	try { txt = localStorage.getItem(SAVE_KEY); } catch (e) {}
-	if (!txt) { await uiAlert("There is no saved game in this browser."); return; }
-	if (!await uiConfirm("Replace the current game with the saved one? (Its saved undo history replaces the current one.)")) return;
-	if (!applyPackage(txt)) await uiAlert("The saved game could not be read.");
-}
 function exportGame() { // a JSON file with the state, the log and the whole undo history
-	var blob = new Blob([savePackage(true)], {type: "application/json"}), a = document.createElement("a");
+	var blob = new Blob([savePackage()], {type: "application/json"}), a = document.createElement("a");
 	a.href = URL.createObjectURL(blob);
 	a.download = "AbyssDiver_save_day" + character.days + ".json";
 	document.body.appendChild(a); a.click(); document.body.removeChild(a);
@@ -3994,15 +4010,13 @@ function importGame() {
 	inp.click();
 }
 async function offerResume() { // on page load: continue the autosaved game if there is one
-	var txt = null;
-	try { txt = localStorage.getItem(SAVE_KEY); } catch (e) {}
+	var txt = readStored();
 	if (!txt) return;
 	var day = "?";
 	try { day = JSON.parse(JSON.parse(txt).state).character.days; } catch (e) { return; }
 	if (!packageChanged(txt)) return; // a save of the untouched initial state has nothing to resume
-	try {
-		if (await uiConfirm("A saved game was found (day " + day + "). The save is replaced after your first action if you start a new game (Cancel = decide later: nothing changes yet).", "Resume it", "Start a new game")) applyPackage(txt);
-	} catch (e) { if (e !== DLG_CANCEL) throw e; }
+	if (await uiConfirm("A saved game was found (day " + day + "). Starting a new game deletes it.", "Resume saved game", "Start a new game", true)) applyPackage(txt);
+	else { try { clearSave(true); } catch (e) {} }
 }
 async function loader() {
 	var navContents = "";
@@ -4022,8 +4036,6 @@ async function loader() {
 	gotoPage(0);
 	updateInfo();
 	get('log').value = firstVisit ? '' : '-Returning visit: Hard Mode New Game+\n';
-	initialFlat = flatState();
-	updateInfo(); // refresh the menu against the baseline
 	await offerResume();
 }
 </script>
