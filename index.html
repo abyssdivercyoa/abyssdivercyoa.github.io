@@ -387,7 +387,7 @@ hr {
 }
 </style>
 <script type="text/javascript">
-// Last modified: 2.3.2 2026-11-06 01:26 UTC (Borer water sacrifice: Ward Water always last again, bought water still before any Flask)
+// Last modified: 2.5.3 2026-11-08 08:32 UTC (Heavy Lifting helpers Effacing Asperity and Return to Sender at 10; Warding Braces shown as one x2 item pill)
 var PRELOAD_DELAY_MS = 15000; // wait this long after arriving in a layer before fetching the next layer's image and mp3 (a paused crossing preloads its target at once)
 var MUSIC_PLAYER_SHOW_MS = 5000; // when the browser blocked autoplay and the music then starts, the player stays at full opacity this long before returning to its normal faded look
 var LOG_SCROLL_LINES = 1; // lines the log moves per mouse-wheel notch (trackpads scroll proportionally): change this one number to taste
@@ -1187,7 +1187,7 @@ var cursesMultiple = { // max number of repeats
 };
 var laborJobs = {"Heavy Lifting" : 80, "Land Excavation" : 80, "City Painter" : 80, "Energy Generator" : 80, "Robo-prostitute" : 50}; // layer 7 labor booths: maximum pay in dubloons
 var laborRates = {"Energy Generator" : 4, "Robo-prostitute" : 5}, LABOR_RATE = 8; // dubloons per day worked (LABOR_RATE: every other job)
-var laborHelpers = {"Energy Generator" : {"Toral Wave" : Infinity}, "Heavy Lifting" : {"World's End Lock" : 20, "Superpositional Skewer" : 20}, "Land Excavation" : {"Brave Vector" : 16}, "City Painter" : {"Firmament Pigment" : 10, "Sated Artist" : 10}}; // Relics that raise the rate of a job (dubloons per day); Infinity = the full pay for 0 days
+var laborHelpers = {"Energy Generator" : {"Toral Wave" : Infinity}, "Heavy Lifting" : {"World's End Lock" : 20, "Superpositional Skewer" : 20, "Effacing Asperity" : 10, "Return to Sender" : 10}, "Land Excavation" : {"Brave Vector" : 16}, "City Painter" : {"Firmament Pigment" : 10, "Sated Artist" : 10}}; // Relics that raise the rate of a job (dubloons per day); Infinity = the full pay for 0 days
 var EFFECT_TEXT = { // every foraging effect text in one place; a saved game stores only "<source>#<variant>" and a count, so changing a text here changes it everywhere (and for old saves)
 	gender : "1 level of Gender Reversal",
 	libido_perm : "1 level of Libido Reinforcement",
@@ -1299,6 +1299,7 @@ var character = {
 	"cloudBulletSave" : 2,
 	"cherryShorten" : 1,
 	"hoardActive" : false,
+	"starlitActive" : false, // Starlit Conquest was brought to the surface (activated for good, like the Pocket Hoard through the One-sided Tunnel)
 	"torchLit" : false, // a Torch lit by a prompt: light + heat for the trip of the current action only (a Relic, a Wonder visit or a portal trip); put out when the action ends
 	"dragonsBeaten" : 0,
 	"dragonAdapted" : false,
@@ -1600,7 +1601,7 @@ async function cherryLuck(rollNo) { // one of Cherry's 2 rolls on the first entr
 	for (var guard = 0; guard < 1000 && !got && nTried < list.length; guard++) {
 		var r = list[rollDie(list.length)];
 		if (tried[r]) continue;
-		if (character.devilsOwn > 0 && await uiConfirm("Cherry rolled " + r + ". Use Devil's Own's free reroll?", "Reroll", "Keep it")) { character.devilsOwn = 0; continue; }
+		if (character.devilsOwn > 0 && await uiConfirm("Cherry rolled " + r + "! Use Devil's Own's free reroll?", "Reroll", "Keep it")) { character.devilsOwn = 0; continue; }
 		var before = (kind == 0) ? character.relics.length + character.devoured.length : curseCopies(), corrBefore = character.corruption;
 		cherryCtx = {kind: kind};
 		try { await takeAction(prefix + r); } finally { cherryCtx = null; }
@@ -1609,7 +1610,7 @@ async function cherryLuck(rollNo) { // one of Cherry's 2 rolls on the first entr
 	};
 	if (!got) { await uiAlert("Cherry's luck finds nothing that can be taken here; the roll is not used."); return null; }
 	var dCorr = character.corruption - corrBefore; // the net change, so every modifier that applied is included
-	await uiAlert("Rolled: " + got + " (" + (kind == 0 ? "costs " + (-dCorr) : (dCorr >= 0 ? "+" : "") + dCorr) + " corruption).");
+	await uiAlert("Rolled: " + got + "! (" + (kind == 0 ? "cost: " + (-dCorr) : (dCorr >= 0 ? "+" : "") + dCorr) + " corruption)");
 	return "Cherry's Chaotic Luck: " + got;
 }
 async function cherryArrival() { // right after arriving in a layer for the first time: Cherry's two rolls, any mix of Relic and Curse, before anything else can be taken there
@@ -2259,6 +2260,7 @@ async function teleportToSurface() { // One-sided Tunnel: surface shop items (Wa
 }
 async function surfaceRefill() { if (hasRelic("Aquarius Ex Nihilo")) return; /* nothing to refill: flasks stay as they are */ var n = await fillFlasksFrom("Surface", false); if (n > 0) note("Water: refilled " + plural(n, "day") + " at the Surface"); } // arriving on the Surface is a visit to a safe source: it refills every Flask and Everhevea with ordinary water, and clears a water deficit if you carry at least one Flask or Everhevea
 async function arriveAtSurface() { // retrieval of what waits on the surface: the belongings the One-sided Tunnel teleported and anything you dropped there (planks are handled at the Relic Workshop)
+	if (holdsRelic("Starlit Conquest") && !character.starlitActive) { character.starlitActive = true; note("Starlit Conquest: activated"); } // carried to the Surface (a devoured Relic has no physical presence)
 	var st = character.surfaceStash;
 	if (!st) { await surfaceRefill(); return; }
 	character.items = character.items.concat(st.items);
@@ -3060,7 +3062,6 @@ async function reactivateWonder(n) { // right-click on a used-up Wonder (Eternal
 	else if (n == "Skewed Shrine" || n == "Steady Shrine") character.shrineTributes = 0; // the tribute counter is shared: it starts again at 0 for both shrines
 	else if (wonders[n][2] < 1) { wonders[n][2] = 1; character.brokerCrumbled = false; character.brokerReopened = true; } // the Empty-handed Broker's rubble is cleared: it stands again, with its single use
 	else character.extraVisits[n] = (character.extraVisits[n] || 0) + 1;
-	if (n == "Boundless Space" || n == "Endless Time") allRelics().forEach(function(o) { if (o.limitsBroken == (n == "Boundless Space" ? "space" : "time")) { o.limitsBroken = null; dropTag(o, "limits broken"); } }); // back to right before first use
 	character.raisonLeft -= 1;
 	character.raison.detail = (character.raison.detail ? character.raison.detail + ", " : "") + n;
 	return "Eternal Return: " + n + " reactivated (" + character.raisonLeft + " of 2 left)";
@@ -4220,7 +4221,7 @@ function updateInfo() {
 	get('threatsBox').style.display = threats.length ? "" : "none"; // hidden while there is nothing to show (the Surface, layer 10, Nadir), so the name leaks nothing early
 	get('threats').innerHTML = threats.map(function(t) { return pill(t.name, "", t.value, t.good ? "g" : "r"); }).join("");
 	var itemPills = [], itemCount = 0, count = 0; // the header count includes multiplicity
-	var stacked = canBuyMultiple.concat(["Medkit (vault)"]); // every item that can be held in several copies is listed once with its count (Food, Water, Flasks, Ward Water and Ammo are tracked outside character.items, so they never match here)
+	var stacked = canBuyMultiple.concat(["Medkit (vault)", "Warding Brace"]); // every item that can be held in several copies is listed once with its count (Food, Water, Flasks, Ward Water and Ammo are tracked outside character.items, so they never match here)
 	for (var i=0;i<stacked.length;i++) {
 		count = character.items.filter(name => name == stacked[i]).length;
 		if (count > 0) { itemPills.push(pill(stacked[i], "", "x" + count)); itemCount += count; }
@@ -4253,6 +4254,7 @@ function relicStatus(o) { // info menu: the live statuses of a Relic object (wha
 	var n = o.ability, t = [], first = allRelics().filter(function(x) { return x.ability == n; })[0] === o, dev = character.devoured.indexOf(o) >= 0;
 	if (n == "Kin Shifter") t.push(kinLeft(o) > 0 ? kinLeft(o) : "used");
 	else if (n == "Pocket Hoard" && character.hoardActive) t.push("activated");
+	else if (n == "Starlit Conquest" && character.starlitActive) t.push("activated");
 	else if (n == "Daedalus Mechanism") { if (character.wings && currentLayer == 6) t.push("flying"); if (first && flightPossible() && isFinite(flyingLimit())) t.push("\u2264 " + flyingLimit() + " kg to fly"); } // the weight limit for flying now (shown once for all copies; not when someone could never fly or there is no limit)
 	else if (n == "Forbidden Grimoire" || n == "Gleam Dazer" || n == "Phoenix Obol") { if (o.used) t.push("used"); }
 	else if (n == "Granted Granite") { if (o.used) t.push(o.used >= 5 ? "used" : o.used + "/5 used"); }
@@ -4605,7 +4607,7 @@ function renderOverlay(n) {
 // Random rolls are not stored: undoing and repeating an action may give a different die result (ruled).
 var undoForce = false; // set by an action that must be an undo step even if it changed no game state (an Override whose code only wrote the log)
 var logStep = null; // the running action's log bookkeeping: n = log length before it, p/s = start and original text of a pre-existing last line it merged into (null if none)
-var colWheelAcc = 0, undoStack = [], undoDepth = 0, SAVE_KEY = "abyssDiverSave", SAVE_VERSION = "2.3.2", UNDO_KEY = "abyssDiverUndo:", LOG_KEY = "abyssDiverLog:";
+var colWheelAcc = 0, undoStack = [], undoDepth = 0, SAVE_KEY = "abyssDiverSave", SAVE_VERSION = "2.5.3", UNDO_KEY = "abyssDiverUndo:", LOG_KEY = "abyssDiverLog:";
 // The browser save is several keys: SAVE_KEY holds a small header (the state, how many undo steps and log chunks there are), UNDO_KEY+i holds undo step i and LOG_KEY+k the k-th piece of the log.
 // `persist` describes what is stored now: steps base..count-1 and the first logLen characters of the log (in logChunks pieces). While ok, an autosave only has to add what is new
 // (actions only ever push a step and append to the log); anything that rewrites history (restoreState: Undo, a canceled action, Load/Import) clears ok and the next autosave rewrites everything.
